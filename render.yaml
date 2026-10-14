@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: tem-van-giay-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: TEM_DATA_DIR
+        value: /tmp/tem-state
+      - key: TEM_ADMIN_TOKEN
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: TEM_ALLOWED_ORIGINS
+        sync: false

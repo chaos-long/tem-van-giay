@@ -1,0 +1,41 @@
+[
+  {
+    "image": "mau_mo_phong_1.png",
+    "product": {
+      "product_name": "MẪU MÔ PHỎNG 1 – Đồ thủ công tái chế",
+      "product_code": "DEMO-001",
+      "description": "Dữ liệu minh họa thao tác, không phải sản phẩm hoặc giấy thật.",
+      "material_source": "Tình huống minh họa: chai đã qua sử dụng từ một đợt thu gom của nhóm. Chưa có bằng chứng thực tế.",
+      "collection_date": "",
+      "maker": "Nhóm minh họa",
+      "revenue_use": "Thông tin minh họa; chưa có giao dịch hoặc khoản chi thực tế.",
+      "evidence_note": "Ảnh vân được tạo bằng chương trình để kiểm tra phần mềm. Không dùng kết quả này chứng minh khả năng chống giả trên giấy thật."
+    }
+  },
+  {
+    "image": "mau_mo_phong_2.png",
+    "product": {
+      "product_name": "MẪU MÔ PHỎNG 2 – Đồ thủ công tái chế",
+      "product_code": "DEMO-002",
+      "description": "Dữ liệu minh họa thao tác, không phải sản phẩm hoặc giấy thật.",
+      "material_source": "Tình huống minh họa: chai đã qua sử dụng từ một đợt thu gom của nhóm. Chưa có bằng chứng thực tế.",
+      "collection_date": "",
+      "maker": "Nhóm minh họa",
+      "revenue_use": "Thông tin minh họa; chưa có giao dịch hoặc khoản chi thực tế.",
+      "evidence_note": "Ảnh vân được tạo bằng chương trình để kiểm tra phần mềm. Không dùng kết quả này chứng minh khả năng chống giả trên giấy thật."
+    }
+  },
+  {
+    "image": "mau_mo_phong_3.png",
+    "product": {
+      "product_name": "MẪU MÔ PHỎNG 3 – Đồ thủ công tái chế",
+      "product_code": "DEMO-003",
+      "description": "Dữ liệu minh họa thao tác, không phải sản phẩm hoặc giấy thật.",
+      "material_source": "Tình huống minh họa: chai đã qua sử dụng từ một đợt thu gom của nhóm. Chưa có bằng chứng thực tế.",
+      "collection_date": "",
+      "maker": "Nhóm minh họa",
+      "revenue_use": "Thông tin minh họa; chưa có giao dịch hoặc khoản chi thực tế.",
+      "evidence_note": "Ảnh vân được tạo bằng chương trình để kiểm tra phần mềm. Không dùng kết quả này chứng minh khả năng chống giả trên giấy thật."
+    }
+  }
+]

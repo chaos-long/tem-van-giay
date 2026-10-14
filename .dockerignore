@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.pytest_cache
+.git
+desktop.py
+tests
+*.sqlite3*
+settings.json
+*.log
+*.spec
