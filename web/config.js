@@ -1,2 +1,2 @@
 // Public connection settings only. Never put an administrator key here.
-window.TEM_CONFIG = { apiBase: '' };
+window.TEM_CONFIG = { apiBase: 'https://tem-van-giay.onrender.com' };
