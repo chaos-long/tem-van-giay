@@ -25,3 +25,12 @@ def test_cloud_add_passes_base64_image_and_json_data():
         args=request.call_args.args
         assert args[0]=='tem_products' and args[1]=='POST'
         assert base64.b64decode(args[2]['image_base64'])==b'png-test'
+
+def test_cloud_startup_creates_fresh_state_directory(tmp_path,monkeypatch):
+    from server import create_app
+    monkeypatch.setenv('SUPABASE_URL','https://project.example')
+    monkeypatch.setenv('SUPABASE_SERVICE_KEY','server-only-secret')
+    state=tmp_path/'new-cloud-state'
+    app=create_app(state,admin_token='test-key')
+    assert isinstance(app.db,CloudDatabase)
+    assert (state/'settings.json').is_file()

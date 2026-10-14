@@ -79,6 +79,7 @@ class Database:
 
 def create_app(data_dir=None,admin_token=None):
     folder=Path(data_dir or os.environ.get('TEM_DATA_DIR') or (Path(os.environ.get('LOCALAPPDATA',str(Path.home()))) / 'TemVanGiay'))
+    folder.mkdir(parents=True,exist_ok=True)
     if os.environ.get('SUPABASE_URL'):
         from cloud_database import CloudDatabase
         if not (admin_token or os.environ.get('TEM_ADMIN_TOKEN')):
