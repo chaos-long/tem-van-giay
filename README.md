@@ -7,6 +7,7 @@ Web nghiên cứu nhận diện tem hình chữ nhật cho đồ thủ công tá
 - Camera có xem trước; chụp ảnh rồi so khớp.
 - Chọn ảnh JPG/PNG/WebP từ thiết bị; căn viền tự động hoặc chọn bốn góc.
 - Đăng ký, sửa, xóa ảnh mẫu và hồ sơ sản phẩm bằng khóa quản lý.
+- Nhập nhiều mẫu từ bộ JSON chứa ảnh và hồ sơ, kiểm tra từng mục, báo lỗi và bỏ qua mã đã tồn tại.
 - Trả hồ sơ chỉ khi có một mẫu đạt điều kiện so khớp.
 - Lưu tên/mã sản phẩm, nguồn vật liệu, ngày thu gom, người làm, sử dụng nguồn thu và ghi chú bằng chứng.
 - Sao lưu dữ liệu; nạp dữ liệu **mô phỏng** để kiểm tra thao tác.
@@ -64,7 +65,8 @@ API `/api/inspect` và `/api/match` nhận `explain: true` để thêm trường
 
 - So khớp ảnh không tự chứng minh tem là bản gốc vật lý. Bản sao ảnh hoặc in lại có thể được nhận khớp.
 - Tem khớp không chứng minh nhựa đã qua sử dụng hoặc nội dung thu–chi đúng. Cần hồ sơ có bằng chứng.
-- Kiểm thử hiện dùng vân tổng hợp và camera mô phỏng; chưa có kết quả trên tem giấy thật hoặc điện thoại thật.
+- Đã kiểm tra tìm vùng giấy trên 30 ảnh chụp giấy của nhóm: bản cũ xử lý được 18/30, bản 0.4 xử lý được 30/30. Đây là tập dùng để sửa thuật toán, chưa phải tập đánh giá độc lập hoặc phép đo chống giả.
+- Chưa thử chụp lại cùng tem bằng điện thoại thật, thay đổi ánh sáng/góc chụp hoặc tấn công bằng bản in lại.
 - Tối đa 100 mẫu trong bản này; một tác vụ so khớp tại một thời điểm.
 - Gói lưu trữ miễn phí có hạn mức/ngủ/tạm dừng; đây là phương án thử nghiệm.
 
@@ -76,3 +78,9 @@ API `/api/inspect` và `/api/match` nhận `explain: true` để thêm trường
 ```
 
 Mã nguồn không chứa khóa cơ sở dữ liệu hoặc thông tin sản phẩm thật. Các hồ sơ DEMO được ghi rõ là tình huống mô phỏng.
+
+## Tìm viền và nhập bộ mẫu (0.4)
+
+Tìm viền dùng cả Canny và các mặt nạ sáng/tối Otsu sau làm mượt. Nếu ảnh có chênh lệch màu đủ rõ, thêm kênh b của Lab và giao các mặt nạ để loại bớt vân nền/bóng. Thử nhiều mức xấp xỉ đa giác, giữ hình lồi bốn cạnh với tỷ lệ/cỡ phù hợp, diện tích đường viền gần diện tích tứ giác; xếp hạng theo diện tích và độ tương phản tại cả bốn cạnh. Mờ mạnh chỉ dùng để tìm vùng giấy; SIFT và DoG vẫn lấy ảnh gốc đã căn, không đổi ngưỡng nhận khớp. Giấy cong/méo, bóng đổ hoặc nền cùng màu vẫn có thể cần chọn góc thủ công.
+
+Trong Quản lý mẫu, chọn Nhập nhiều mẫu rồi chọn tệp JSON UTF-8 `{ "records": [{ "file": "anh01.jpg", "image": "data:image/jpeg;base64,...", "product": { "product_name": "MẪU - Tên", "product_code": "MAU-001" } }] }`. `product` dùng cùng các trường của biểu mẫu đơn; `corners` là tùy chọn. Tối đa 100 mục/tệp 160 MB, mỗi ảnh vẫn dưới giới hạn API. Mỗi mục gọi API đăng ký bình thường bằng phiên quản lý hiện tại; không có đường nhập bỏ qua chất lượng, chống trùng hoặc xác thực. Khi hết thời gian/kết nối đứt, dừng và tải lại danh sách trước khi thử tiếp để tránh ghi lại một yêu cầu có thể đã thành công. Hồ sơ có mã đã tồn tại được bỏ qua, không bị ghi đè.

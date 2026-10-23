@@ -58,22 +58,57 @@ def detect_rectangle(image):
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(gray, 35, 110)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((3,3),np.uint8))
+    # Large-scale smoothing suppresses fibers/background grain for OUTLINE search
+    # only. Texture extraction below still receives the original sharp photograph.
+    smooth = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (0,0), 4.5)
+    light = cv2.threshold(smooth, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+    masks = [light, cv2.bitwise_not(light)]
+    lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+    # Chroma helps distinguish brown paper from dark veins on a pale desk. Both
+    # polarities are tested; this is not a rule that every paper must be brown.
+    chroma = cv2.GaussianBlur(lab[:,:,2], (0,0), 4.5)
+    use_chroma = float(np.percentile(chroma,95)-np.percentile(chroma,5)) >= 6
+    if use_chroma:
+        color = cv2.threshold(chroma,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        masks += [cv2.bitwise_and(a,b) for a in masks[:2]
+                  for b in (color,cv2.bitwise_not(color))]
+        masks += [color,cv2.bitwise_not(color)]
+    masks = [cv2.morphologyEx(mask,cv2.MORPH_CLOSE,np.ones((7,7),np.uint8)) for mask in masks]
     candidates = []
-    for binary in [edges, cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]]:
+    for binary in [edges]+masks:
         contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours:
             area = abs(cv2.contourArea(contour))
             fraction = area / gray.size
             if not 0.08 <= fraction <= 0.94:
                 continue
-            poly = cv2.approxPolyDP(contour, .022 * cv2.arcLength(contour, True), True)
-            if len(poly) != 4 or not cv2.isContourConvex(poly):
-                continue
-            p = ordered_corners(poly[:,0,:])
-            sides = [np.linalg.norm(p[(i+1)%4]-p[i]) for i in range(4)]
-            ar = max((sides[0]+sides[2])/(sides[1]+sides[3]), (sides[1]+sides[3])/(sides[0]+sides[2]))
-            if 1.1 <= ar <= 3.5 and min(sides) >= 65:
-                candidates.append((area, p / scale))
+            for tolerance in (.012,.018,.022,.03,.04):
+                poly = cv2.approxPolyDP(contour,tolerance*cv2.arcLength(contour,True),True)
+                if len(poly)!=4 or not cv2.isContourConvex(poly):continue
+                p = ordered_corners(poly[:,0,:])
+                sides = [np.linalg.norm(p[(i+1)%4]-p[i]) for i in range(4)]
+                ar = max((sides[0]+sides[2])/(sides[1]+sides[3]), (sides[1]+sides[3])/(sides[0]+sides[2]))
+                fill=area/abs(cv2.contourArea(p))
+                if not (1.1<=ar<=3.5 and min(sides)>=65 and .88<=fill<=1.12):continue
+                contrasts=[]
+                for j in range(4):
+                    a,b=p[j],p[(j+1)%4];direction=(b-a)/sides[j]
+                    normal=np.array([-direction[1],direction[0]])*6
+                    points=a+(b-a)*np.linspace(.15,.85,45)[:,None]
+                    inside=np.rint(points+normal).astype(int);outside=np.rint(points-normal).astype(int)
+                    for positions in (inside,outside):
+                        positions[:,0]=np.clip(positions[:,0],0,small.shape[1]-1)
+                        positions[:,1]=np.clip(positions[:,1],0,small.shape[0]-1)
+                    delta=lab[inside[:,1],inside[:,0]].astype(float)-lab[outside[:,1],outside[:,0]].astype(float)
+                    contrast=np.median(delta,axis=0)
+                    if use_chroma:contrast[0]*=.25
+                    contrasts.append(float(np.linalg.norm(contrast)))
+                # A huge quadrilateral with one side lying on the background
+                # should lose to a paper outline supported on all four sides.
+                support=min(1.,min(contrasts)/(8 if use_chroma else 12))
+                score=area*(.15+.85*support)*(1-min(.12,abs(1-fill)))
+                candidates.append((score,p/scale))
+                break
     if not candidates:
         raise ImageProblem('Chưa tìm được viền tem. Đặt tem trên nền tối hoặc chọn bốn góc thủ công.')
     candidates.sort(key=lambda item:item[0], reverse=True)

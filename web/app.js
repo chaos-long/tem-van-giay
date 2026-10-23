@@ -86,6 +86,54 @@ $('loginButton').onclick=async()=>{token=$('adminKey').value.trim();try{await ap
 $('logoutButton').onclick=()=>{token='';sessionStorage.removeItem('temAdmin');showAdmin();};
 function newProduct(){editing=null;$('productForm').reset();$('formTitle').textContent='Thông tin sản phẩm mới';$('saveProduct').textContent='Đăng ký ảnh tem hiện tại';message('registerMessage','');}
 $('newProduct').onclick=newProduct;
+let batchRecords=[],batchRunning=false,batchStop=false;
+$('openBatch').onclick=()=>{$('batchPanel').hidden=!$('batchPanel').hidden;};
+$('batchUpload').onchange=async event=>{
+ const file=event.target.files[0];if(!file||batchRunning)return;
+ batchRecords=[];$('startBatch').disabled=true;$('batchList').replaceChildren();
+ try{
+  if(file.size>160_000_000)throw new Error('Bộ mẫu quá lớn. Chia thành tệp dưới 160 MB.');
+  const data=JSON.parse(await file.text());
+  if(!Array.isArray(data.records)||!data.records.length||data.records.length>100)throw new Error('Tệp cần có từ 1 đến 100 mục trong records.');
+  const codes=new Set();
+  for(const record of data.records){
+   if(!record||typeof record.file!=='string'||typeof record.image!=='string'||record.image.length>22_000_000||!record.product||typeof record.product!=='object')throw new Error('Một mục thiếu tên tệp, ảnh hoặc hồ sơ.');
+   const product=record.product;
+   if(typeof product.product_name!=='string'||!product.product_name.trim()||typeof product.product_code!=='string'||!product.product_code.trim())throw new Error('Mỗi hồ sơ cần tên và mã sản phẩm.');
+   const code=product.product_code.trim().toLowerCase();if(codes.has(code))throw new Error('Bộ mẫu có mã sản phẩm lặp: '+product.product_code);codes.add(code);
+  }
+  batchRecords=data.records.map(record=>({...record,state:'pending'}));
+  for(const record of batchRecords){record.row=element('li',record.file+' · '+record.product.product_code+' · '+record.product.product_name+' — Chờ đăng ký');$('batchList').append(record.row);}
+  message('batchMessage','Đã đọc '+batchRecords.length+' hồ sơ. Kiểm tra tên và mã, rồi bấm Đăng ký bộ mẫu.');$('startBatch').disabled=false;
+ }catch(e){batchRecords=[];$('batchList').replaceChildren();message('batchMessage',e.message||'Không đọc được bộ mẫu.',true);}
+ event.target.value='';
+};
+$('stopBatch').onclick=()=>{batchStop=true;message('batchMessage','Sẽ dừng sau khi máy chủ xử lý xong ảnh hiện tại.');};
+$('startBatch').onclick=async()=>{
+ if(batchRunning||!token||!batchRecords.length)return;
+ batchRunning=true;batchStop=false;$('startBatch').disabled=true;$('batchUpload').disabled=true;$('stopBatch').hidden=false;
+ let saved=0,skipped=0,failed=0;
+ try{
+  const current=await api('/api/products','GET',null,true);
+  const existing=new Set(current.products.map(product=>product.product_code.trim().toLowerCase()));
+  for(let index=0;index<batchRecords.length&&!batchStop;index++){
+   const record=batchRecords[index],label=record.file+' · '+record.product.product_code+' · '+record.product.product_name;
+   if(record.state==='saved'||existing.has(record.product.product_code.trim().toLowerCase())){skipped++;record.row.textContent=label+' — Đã có mã, bỏ qua';continue;}
+   record.row.textContent=label+' — Đang kiểm tra và đăng ký…';message('batchMessage','Đang xử lý '+(index+1)+'/'+batchRecords.length+'. Đã thêm '+saved+' mẫu.');
+   try{
+    const result=await api('/api/products','POST',{image:record.image,product:record.product,...(record.corners?{corners:record.corners}:{})},true);
+    record.state='saved';record.id=result.product.id;record.row.textContent=label+' — Đã lưu · '+result.product.id;saved++;existing.add(record.product.product_code.trim().toLowerCase());
+   }catch(e){
+    record.state='failed';record.row.textContent=label+' — '+connectionError(e);failed++;
+    // A timeout may happen after the database commit. Stop and refresh before
+    // another attempt; never blindly resubmit a possibly successful write.
+    if(e.status===401||e.name==='TimeoutError'||e instanceof TypeError){batchStop=true;}
+   }
+  }
+  message('batchMessage',(batchStop?'Đã dừng. ':'Đã xử lý xong. ')+'Thêm '+saved+' mẫu; bỏ qua '+skipped+' mã đã có; '+failed+' mục lỗi. Xem kết quả từng ảnh bên dưới.',failed>0);
+ }catch(e){message('batchMessage',connectionError(e),true);}
+ finally{batchRunning=false;$('batchUpload').disabled=false;$('stopBatch').hidden=true;$('startBatch').disabled=false;await loadProducts();health().catch(()=>{});}
+};
 async function loadProducts(){try{const data=await api('/api/products','GET',null,true);products=data.products;$('registeredCount').textContent=products.length+' mẫu';$('productList').replaceChildren();if(!products.length)$('productList').append(element('p','Chưa có mẫu nào. Chọn ảnh tem và nhập thông tin để bắt đầu.','subtle'));for(const product of products){const item=element('article',null,'product-item');item.append(element('h3',product.product_name),element('p',product.product_code+' · '+(product.maker||'Chưa ghi người làm')));const edit=element('button','Sửa thông tin','button text');edit.onclick=()=>{editing=product.id;for(const input of $('productForm').elements){if(input.name)input.value=product[input.name]||'';}$('formTitle').textContent='Sửa thông tin sản phẩm';$('saveProduct').textContent='Lưu thông tin';message('registerMessage','Giữ nguyên ảnh tem đã đăng ký.');$('productForm').scrollIntoView({behavior:'smooth',block:'start'});};const del=element('button','Xóa mẫu','button text danger');del.onclick=async()=>{if(!confirm('Xóa mẫu tem của '+product.product_name+'?'))return;try{await api('/api/products/'+product.id,'DELETE',null,true);if(editing===product.id)newProduct();await loadProducts();await health();}catch(e){toast(connectionError(e));}};item.append(edit,del);$('productList').append(item);}}catch(e){if(e.status===401){token='';sessionStorage.removeItem('temAdmin');showAdmin();}else toast(connectionError(e));}}
 $('productForm').onsubmit=async event=>{event.preventDefault();const product=Object.fromEntries(new FormData(event.target));if(!editing&&(!imageData||!corners||!imageReady)){message('registerMessage','Chọn ảnh tem rõ nét ở mục Kiểm tra tem trước khi đăng ký.',true);return;}$('saveProduct').disabled=true;try{await api(editing?'/api/products/'+editing:'/api/products',editing?'PUT':'POST',editing?{product}:{image:imageData,corners,product},true);message('registerMessage',editing?'Đã cập nhật thông tin.':'Đã đăng ký ảnh tem và thông tin sản phẩm.');await loadProducts();await health();newProduct();toast('Đã lưu vào cơ sở dữ liệu.');}catch(e){message('registerMessage',connectionError(e),true);}finally{$('saveProduct').disabled=false;}};
 $('backupButton').onclick=async()=>{try{const blob=await api('/api/backup','GET',null,true);const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='Sao_luu_tem_van_giay.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){toast(connectionError(e));}};
