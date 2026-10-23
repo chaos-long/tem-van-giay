@@ -35,3 +35,12 @@ def test_paper_outline_on_textured_background_with_shadow(paper,background):
 
 def test_no_outline_is_reported_for_uniform_background():
     with pytest.raises(ImageProblem):detect_rectangle(np.full((700,900,3),180,np.uint8))
+
+def test_registration_progress_is_admin_only_and_contains_no_keys(tmp_path):
+    from server import create_app
+    client=create_app(tmp_path,admin_token='progress-test-secret').test_client()
+    assert client.get('/api/admin/diagnostics').status_code==401
+    result=client.get('/api/admin/diagnostics',headers={'Authorization':'Bearer progress-test-secret'})
+    assert result.status_code==200 and result.json['phase']=='idle'
+    assert set(result.json)=={'phase','phase_seconds','busy'}
+    assert b'progress-test-secret' not in result.data

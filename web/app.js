@@ -11,7 +11,7 @@ function toast(text){$('toast').textContent=text;$('toast').hidden=false;setTime
 async function api(path,method='GET',body=null,auth=false){
  if(!base)throw new Error('Chưa có địa chỉ máy chủ. Mở mục Kết nối hoặc nhờ nhóm cấu hình máy chủ HTTPS.');
  const headers={};if(body)headers['Content-Type']='application/json';if(auth)headers.Authorization='Bearer '+token;
- const response=await fetch(base+path,{method,headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(45000)});
+ const response=await fetch(base+path,{method,headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(path==='/api/products'&&method==='POST'?120000:45000)});
  if(path==='/api/backup'){if(!response.ok)throw new Error('Không tải được bản sao lưu. Kiểm tra khóa quản lý.');return response.blob();}
  let data;try{data=await response.json();}catch{throw new Error('Địa chỉ không trả về dữ liệu của Tem Vân Giấy.');}
  if(!response.ok){const e=new Error(data.message||'Không thực hiện được yêu cầu.');e.status=response.status;e.analysis=data.analysis;throw e;}return data;
@@ -114,12 +114,17 @@ $('startBatch').onclick=async()=>{
  batchRunning=true;batchStop=false;$('startBatch').disabled=true;$('batchUpload').disabled=true;$('stopBatch').hidden=false;
  let saved=0,skipped=0,failed=0;
  try{
+  message('batchMessage','Đang kiểm tra quyền quản lý và danh sách mã đã có…');
+  await api('/api/admin/login','POST',{},true);
   const current=await api('/api/products','GET',null,true);
   const existing=new Set(current.products.map(product=>product.product_code.trim().toLowerCase()));
   for(let index=0;index<batchRecords.length&&!batchStop;index++){
    const record=batchRecords[index],label=record.file+' · '+record.product.product_code+' · '+record.product.product_name;
    if(record.state==='saved'||existing.has(record.product.product_code.trim().toLowerCase())){skipped++;record.row.textContent=label+' — Đã có mã, bỏ qua';continue;}
    record.row.textContent=label+' — Đang kiểm tra và đăng ký…';message('batchMessage','Đang xử lý '+(index+1)+'/'+batchRecords.length+'. Đã thêm '+saved+' mẫu.');
+   const phaseNames={idle:'đang tải ảnh tới máy chủ',reading_image:'đang đọc ảnh',waiting:'đang chờ tác vụ trước',checking_database:'đang đọc cơ sở dữ liệu',processing_image:'đang xử lý vùng giấy',checking_duplicates:'đang kiểm tra trùng',saving:'đang lưu cơ sở dữ liệu',saved:'đã lưu, đang chờ phản hồi'};
+   let progressBusy=false;
+   const progressTimer=setInterval(async()=>{if(progressBusy)return;progressBusy=true;try{const status=await api('/api/admin/diagnostics','GET',null,true);message('batchMessage','Ảnh '+(index+1)+'/'+batchRecords.length+': '+(phaseNames[status.phase]||'đang xử lý')+'. Đã thêm '+saved+' mẫu.');}catch{}finally{progressBusy=false;}},10000);
    try{
     const result=await api('/api/products','POST',{image:record.image,product:record.product,...(record.corners?{corners:record.corners}:{})},true);
     record.state='saved';record.id=result.product.id;record.row.textContent=label+' — Đã lưu · '+result.product.id;saved++;existing.add(record.product.product_code.trim().toLowerCase());
@@ -128,7 +133,7 @@ $('startBatch').onclick=async()=>{
     // A timeout may happen after the database commit. Stop and refresh before
     // another attempt; never blindly resubmit a possibly successful write.
     if(e.status===401||e.name==='TimeoutError'||e instanceof TypeError){batchStop=true;}
-   }
+   }finally{clearInterval(progressTimer);}
   }
   message('batchMessage',(batchStop?'Đã dừng. ':'Đã xử lý xong. ')+'Thêm '+saved+' mẫu; bỏ qua '+skipped+' mã đã có; '+failed+' mục lỗi. Xem kết quả từng ảnh bên dưới.',failed>0);
  }catch(e){message('batchMessage',connectionError(e),true);}
