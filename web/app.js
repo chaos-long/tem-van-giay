@@ -123,8 +123,8 @@ $('startBatch').onclick=async()=>{
    if(record.state==='saved'||existing.has(record.product.product_code.trim().toLowerCase())){skipped++;record.row.textContent=label+' — Đã có mã, bỏ qua';continue;}
    record.row.textContent=label+' — Đang kiểm tra và đăng ký…';message('batchMessage','Đang xử lý '+(index+1)+'/'+batchRecords.length+'. Đã thêm '+saved+' mẫu.');
    const phaseNames={idle:'đang tải ảnh tới máy chủ',reading_image:'đang đọc ảnh',waiting:'đang chờ tác vụ trước',checking_database:'đang đọc cơ sở dữ liệu',processing_image:'đang xử lý vùng giấy',checking_duplicates:'đang kiểm tra trùng',saving:'đang lưu cơ sở dữ liệu',saved:'đã lưu, đang chờ phản hồi'};
-   let progressBusy=false;
-   const progressTimer=setInterval(async()=>{if(progressBusy)return;progressBusy=true;try{const status=await api('/api/admin/diagnostics','GET',null,true);message('batchMessage','Ảnh '+(index+1)+'/'+batchRecords.length+': '+(phaseNames[status.phase]||'đang xử lý')+'. Đã thêm '+saved+' mẫu.');}catch{}finally{progressBusy=false;}},10000);
+   let progressBusy=false,progressActive=true;
+   const progressTimer=setInterval(async()=>{if(progressBusy)return;progressBusy=true;try{const status=await api('/api/admin/diagnostics','GET',null,true);if(progressActive)message('batchMessage','Ảnh '+(index+1)+'/'+batchRecords.length+': '+(phaseNames[status.phase]||'đang xử lý')+'. Đã thêm '+saved+' mẫu.');}catch{}finally{progressBusy=false;}},10000);
    try{
     const result=await api('/api/products','POST',{image:record.image,product:record.product,...(record.corners?{corners:record.corners}:{})},true);
     record.state='saved';record.id=result.product.id;record.row.textContent=label+' — Đã lưu · '+result.product.id;saved++;existing.add(record.product.product_code.trim().toLowerCase());
@@ -133,7 +133,7 @@ $('startBatch').onclick=async()=>{
     // A timeout may happen after the database commit. Stop and refresh before
     // another attempt; never blindly resubmit a possibly successful write.
     if(e.status===401||e.name==='TimeoutError'||e instanceof TypeError){batchStop=true;}
-   }finally{clearInterval(progressTimer);}
+   }finally{progressActive=false;clearInterval(progressTimer);}
   }
   message('batchMessage',(batchStop?'Đã dừng. ':'Đã xử lý xong. ')+'Thêm '+saved+' mẫu; bỏ qua '+skipped+' mã đã có; '+failed+' mục lỗi. Xem kết quả từng ảnh bên dưới.',failed>0);
  }catch(e){message('batchMessage',connectionError(e),true);}

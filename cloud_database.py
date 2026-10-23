@@ -16,6 +16,7 @@ class CloudDatabase:
     def request(self,table,method='GET',body=None,params=None):
         suffix='?'+urlencode(params) if params else ''
         headers={'apikey':self.key,'Content-Type':'application/json','Prefer':'return=representation'}
+        if method=='POST':headers['Prefer']='return=minimal'
         # Supports both Supabase secret API keys and the legacy JWT service_role.
         if self.key.count('.')==2:headers['Authorization']='Bearer '+self.key
         req=Request(self.url+'/'+table+suffix,method=method,headers=headers,data=json.dumps(body,ensure_ascii=False).encode() if body is not None else None)
@@ -28,6 +29,9 @@ class CloudDatabase:
     def rows(self):
         records=self.request('tem_products',params={'select':'*','order':'created_at.desc,id.asc','limit':'100'})
         return [{'id':r['id'],'data':json.dumps(r['data'],ensure_ascii=False),'image':base64.b64decode(r['image_base64']),'quality':json.dumps(r['quality']),'created_at':r['created_at']} for r in records]
+    def summary_rows(self):
+        records=self.request('tem_products',params={'select':'id,data,quality,created_at','order':'created_at.desc,id.asc','limit':'100'})
+        return [{'id':r['id'],'data':json.dumps(r['data'],ensure_ascii=False),'quality':json.dumps(r['quality']),'created_at':r['created_at']} for r in records]
     def product(self,row):return {'id':row['id'],**json.loads(row['data']),'created_at':row['created_at'],'quality':json.loads(row['quality'])}
     def add(self,product_id,info,image,quality):
         return self.request('tem_products','POST',{'id':product_id,'data':info,'image_base64':base64.b64encode(image).decode(),'quality':quality})
@@ -38,11 +42,17 @@ class CloudDatabase:
     def references(self):
         output=[]
         with self.lock:
-            rows=self.rows();live={r['id'] for r in rows}
+            rows=self.summary_rows();live={r['id'] for r in rows}
             self.cache={key:value for key,value in self.cache.items() if key in live}
+            missing=[row['id'] for row in rows if row['id'] not in self.cache]
+            images={}
+            if missing:
+                records=self.request('tem_products',params={'select':'id,image_base64','id':'in.('+','.join(missing)+')','limit':'100'})
+                images={record['id']:base64.b64decode(record['image_base64']) for record in records}
             for row in rows:
                 if row['id'] not in self.cache:
-                    image=cv2.imdecode(np.frombuffer(row['image'],np.uint8),cv2.IMREAD_COLOR)
+                    if row['id'] not in images:continue
+                    image=cv2.imdecode(np.frombuffer(images[row['id']],np.uint8),cv2.IMREAD_COLOR)
                     gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)[45:403,64:576]
                     pts,desc=features(gray)
                     self.cache[row['id']]=Sample(image,gray,pts,desc,json.loads(row['quality']),[])

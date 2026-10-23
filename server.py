@@ -47,6 +47,8 @@ class Database:
         finally:db.close()
     def rows(self):
         with self.connection() as db:return db.execute('SELECT * FROM products ORDER BY created_at DESC,id').fetchall()
+    def summary_rows(self):
+        with self.connection() as db:return db.execute('SELECT id,data,quality,created_at FROM products ORDER BY created_at DESC,id').fetchall()
     def product(self,row):
         return {'id':row['id'],**json.loads(row['data']),'created_at':row['created_at'],'quality':json.loads(row['quality'])}
     def add(self,product_id,info,image,quality):
@@ -151,7 +153,7 @@ def create_app(data_dir=None,admin_token=None):
     def assets(filename):return send_from_directory(static,filename)
     @app.get('/api/health')
     def health():
-        return jsonify(status='ok',version='0.4.1',product_count=len(db.rows()),threshold=config['threshold'],margin=config['margin'],busy=app.match_lock.locked())
+        return jsonify(status='ok',version='0.4.2',product_count=len(db.summary_rows()),threshold=config['threshold'],margin=config['margin'],busy=app.match_lock.locked())
     @app.post('/api/admin/login')
     @admin
     def login():return jsonify(status='ok')
@@ -162,7 +164,7 @@ def create_app(data_dir=None,admin_token=None):
         return jsonify(phase=progress['phase'],phase_seconds=round(time.monotonic()-progress['started']),busy=app.match_lock.locked())
     @app.get('/api/products')
     @admin
-    def products():return jsonify(products=[db.product(row) for row in db.rows()])
+    def products():return jsonify(products=[db.product(row) for row in db.summary_rows()])
     @app.post('/api/inspect')
     def inspect():
         data=body();explain=data.get('explain') is True
@@ -182,21 +184,23 @@ def create_app(data_dir=None,admin_token=None):
         registration_phase('waiting')
         with app.match_lock:
             registration_phase('checking_database')
-            if len(db.rows())>=100:return jsonify(message='Bản thử nghiệm hỗ trợ tối đa 100 tem. Sao lưu dữ liệu trước khi mở rộng.'),409
+            existing_rows=db.summary_rows()
+            if len(existing_rows)>=100:return jsonify(message='Bản thử nghiệm hỗ trợ tối đa 100 tem. Sao lưu dữ liệu trước khi mở rộng.'),409
             registration_phase('processing_image')
             sample=prepare(decode_image(data.get('image')),data.get('corners'))
             registration_phase('checking_duplicates')
             duplicate=decide(sample,db.references())
             if duplicate['status'] in ['matched','ambiguous']:
                 return jsonify(message='Ảnh tem này đã có hoặc quá gần với một mẫu đã đăng ký. Dùng một chiếc tem khác.'),409
-            for row in db.rows():
+            for row in existing_rows:
                 if json.loads(row['data'])['product_code'].casefold()==clean['product_code'].casefold():
                     return jsonify(message='Mã sản phẩm đã tồn tại. Chọn mã riêng cho sản phẩm này.'),409
             product_id=str(uuid.uuid4())
             image=cv2.imencode('.png',sample.image)[1].tobytes()
             registration_phase('saving')
             db.add(product_id,clean,image,sample.quality)
-            row=next(row for row in db.rows() if row['id']==product_id)
+            with db.lock:db.cache[product_id]=sample
+            row=next(row for row in db.summary_rows() if row['id']==product_id)
             registration_phase('saved')
             return jsonify(status='registered',product=db.product(row),preview=encode_image(sample.image)),201
     @app.post('/api/match')
@@ -215,7 +219,7 @@ def create_app(data_dir=None,admin_token=None):
             geometry=result.pop('_geometry',None)
             product_id=result.get('match',{}).get('product_id')
             if result['status']=='matched':
-                row=next(row for row in db.rows() if row['id']==product_id)
+                row=next(row for row in db.summary_rows() if row['id']==product_id)
                 result['product']=db.product(row)
             if explain:
                 reference=next((ref for pid,ref in refs if pid==product_id),None)
@@ -248,7 +252,7 @@ def create_app(data_dir=None,admin_token=None):
         clean={field:str(info.get(field,'')).strip()[:3000] for field in FIELDS}
         if not clean['product_name'] or not clean['product_code']:return jsonify(message='Nhập tên và mã sản phẩm.'),400
         with app.match_lock:
-            for row in db.rows():
+            for row in db.summary_rows():
                 if row['id']!=product_id and json.loads(row['data'])['product_code'].casefold()==clean['product_code'].casefold():
                     return jsonify(message='Mã sản phẩm đã tồn tại.'),409
             changed=db.update(product_id,clean)
@@ -272,7 +276,7 @@ def create_app(data_dir=None,admin_token=None):
         records=json.loads((demo_dir/'records.json').read_text(encoding='utf-8'))
         added=0
         with app.match_lock:
-            existing={json.loads(row['data'])['product_code'] for row in db.rows()}
+            existing={json.loads(row['data'])['product_code'] for row in db.summary_rows()}
             if len(existing)+len(records)>100:return jsonify(message='Không còn đủ chỗ cho mẫu minh họa.'),409
             for record in records:
                 info=record['product']
