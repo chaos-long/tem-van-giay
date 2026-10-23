@@ -10,7 +10,7 @@ Web nghiên cứu nhận diện tem hình chữ nhật cho đồ thủ công tá
 - Trả hồ sơ chỉ khi có một mẫu đạt điều kiện so khớp.
 - Lưu tên/mã sản phẩm, nguồn vật liệu, ngày thu gom, người làm, sử dụng nguồn thu và ghi chú bằng chứng.
 - Sao lưu dữ liệu; nạp dữ liệu **mô phỏng** để kiểm tra thao tác.
-- **Xem cách nhận diện:** ảnh căn thẳng, vùng xám, vân đã tăng tương phản và các điểm SIFT thực sự tìm thấy. Khi khớp duy nhất, hiện thêm cặp điểm RANSAC, hai vùng đã căn và ảnh chênh lệch.
+- **Xem cách nhận diện:** ảnh căn thẳng, vùng xám, hai lớp Gaussian, hiệu DoG và các điểm SIFT thực sự tìm thấy. Khi khớp duy nhất, hiện thêm các cặp trước/sau RANSAC, hai vùng đã căn và ảnh chênh lệch.
 
 ## Trạng thái
 
@@ -48,13 +48,17 @@ Tìm bốn góc → căn ảnh về 640 × 448 pixel → bỏ khoảng 10% mép 
 
 Đây là bản tự triển khai dùng SIFT và lọc chênh lệch Gaussian, không phải ứng dụng chính thức của bài Berchtold 2021. Các ngưỡng là tham số thử nghiệm, cần hiệu chỉnh trên giấy thật.
 
-## Xem cách nhận diện (0.2)
+## Xem cách nhận diện (0.3)
 
 Chọn/chụp ảnh ở Kiểm tra tem, rồi kéo xuống **Xem cách nhận diện**. Bấm các bước hoặc nút Trước/Tiếp để xem ảnh từ chính lần xử lý đó. Các ảnh tăng tương phản chỉ phục vụ quan sát; thuật toán vẫn dùng giá trị lọc gốc. Vòng tròn là điểm đặc trưng ảnh, không phải máy đã nhìn thấy và đếm từng sợi giấy. Nếu chất lượng kém nhưng đã tìm được tem, vẫn hiện các ảnh giúp hiểu vì sao cần chụp lại.
 
-Sau một kết quả khớp duy nhất, bước 5 nối tối đa 60 cặp điểm thực sự phù hợp hình học, bước 6 đặt ảnh chụp đã căn cạnh mẫu và bước 7 biểu diễn độ chênh tuyệt đối của vùng vân. Ảnh chênh là minh họa phụ, không thay công thức tương quan và không thể hiện xác suất thật/giả. Không công bố ảnh mẫu hoặc ứng viên khi kết quả không khớp/chưa phân biệt được.
+Sáu bước đầu gồm: căn tem, chọn vùng xám, Gaussian sigma 0,8, Gaussian sigma 4, lấy hiệu DoG và tìm điểm SIFT. Gaussian làm mờ có trọng số; sigma lớn hơn làm mượt trên phạm vi rộng hơn. Hai ảnh Gaussian được hiển thị ở 8 bit cho dễ xem, nhưng DoG dùng trực tiếp hai mảng số thực để không mất độ chính xác do làm tròn.
 
-API `/api/inspect` và `/api/match` nhận `explain: true` để thêm trường `analysis`; bỏ cờ này giữ phản hồi gọn như trước. Ảnh minh họa chỉ tồn tại trong phản hồi và trình duyệt, không lưu vào cơ sở dữ liệu. Bản 0.2 giữ nguyên các ngưỡng và điều kiện nhận khớp. Khả năng chống sao chép vật lý vẫn chưa được chứng minh.
+Sau một kết quả khớp duy nhất có thêm 5 bước: cặp ứng viên trước RANSAC, RANSAC giữ/loại cặp, các cặp được giữ, căn hai vùng và ảnh chênh lệch. Hai hình trước/sau RANSAC vẽ đúng cùng tối đa 60 cặp từ lần so khớp thực tế; xanh lam là chưa phân loại, xanh lá là giữ, đỏ là loại theo mặt nạ của phép biến đổi. Thống kê ghi tổng ứng viên, inlier/outlier và số cặp được vẽ. Nếu không có outlier thật thì không vẽ thêm đường đỏ giả.
+
+RANSAC dùng ngưỡng sai số 3 pixel và tối đa 2.000 vòng thử. Đây là giới hạn cấu hình; OpenCV không trả lịch sử từng vòng thử, nên web không dựng hoạt ảnh các vòng lặp chưa quan sát. Ảnh chênh là minh họa phụ, không thay công thức tương quan và không thể hiện xác suất thật/giả. Không công bố ảnh mẫu hoặc ứng viên khi kết quả không khớp/chưa phân biệt được; giao diện giải thích vì sao cần hai ảnh và một mẫu được chấp nhận trước khi hiện RANSAC.
+
+API `/api/inspect` và `/api/match` nhận `explain: true` để thêm trường `analysis`; bỏ cờ này giữ phản hồi gọn như trước. Ảnh minh họa chỉ tồn tại trong phản hồi và trình duyệt, không lưu vào cơ sở dữ liệu. Bản 0.3 giữ nguyên các ngưỡng và điều kiện nhận khớp. Khả năng chống sao chép vật lý vẫn chưa được chứng minh.
 
 ## Giới hạn
 

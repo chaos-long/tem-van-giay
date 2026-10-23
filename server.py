@@ -148,7 +148,7 @@ def create_app(data_dir=None,admin_token=None):
     def assets(filename):return send_from_directory(static,filename)
     @app.get('/api/health')
     def health():
-        return jsonify(status='ok',version='0.2.0',product_count=len(db.rows()),threshold=config['threshold'],margin=config['margin'])
+        return jsonify(status='ok',version='0.3.0',product_count=len(db.rows()),threshold=config['threshold'],margin=config['margin'])
     @app.post('/api/admin/login')
     @admin
     def login():return jsonify(status='ok')

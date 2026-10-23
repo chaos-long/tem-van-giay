@@ -6,6 +6,8 @@ import numpy as np
 
 cv2.setNumThreads(1)
 WIDTH, HEIGHT = 640, 448
+SIGMA_FINE, SIGMA_COARSE = .8, 4.0
+RANSAC_ERROR_PX, RANSAC_MAX_ITERATIONS = 3.0, 2000
 
 class ImageProblem(ValueError):
     def __init__(self, message, analysis=None):
@@ -105,9 +107,15 @@ def normalize(image, corners=None):
     gray = cv2.cvtColor(normalized,cv2.COLOR_BGR2GRAY)[45:403,64:576]
     return normalized, gray, (p / np.float32([iw,ih])).tolist()
 
-def texture(gray):
+def gaussian_layers(gray):
     g = gray.astype(np.float32)/255
-    return cv2.GaussianBlur(g,(0,0),.8) - cv2.GaussianBlur(g,(0,0),4.0)
+    return (cv2.GaussianBlur(g,(0,0),SIGMA_FINE),
+            cv2.GaussianBlur(g,(0,0),SIGMA_COARSE))
+
+
+def texture(gray):
+    fine,coarse=gaussian_layers(gray)
+    return fine-coarse
 
 def features(gray):
     band = texture(gray)
@@ -155,7 +163,7 @@ def compare(query,reference,diagnostics=False):
     if len(good)<14:return None
     source=np.float32([query.points[m.queryIdx] for m in good])
     target=np.float32([reference.points[m.trainIdx] for m in good])
-    homography,inlier_mask=cv2.findHomography(source,target,cv2.RANSAC,3.0,maxIters=2000)
+    homography,inlier_mask=cv2.findHomography(source,target,cv2.RANSAC,RANSAC_ERROR_PX,maxIters=RANSAC_MAX_ITERATIONS)
     if homography is None or inlier_mask is None or not np.isfinite(homography).all():return None
     flags=inlier_mask.ravel().astype(bool);inliers=int(flags.sum())
     if inliers<14 or inliers/len(good)<.45:return None
@@ -185,6 +193,7 @@ def compare(query,reference,diagnostics=False):
         # These are the geometry and accepted points from THIS comparison, not a
         # second reconstruction or an invented illustration. Never JSON-encode them.
         result['_geometry']={'source':source[flags],'target':target[flags],
+                             'all_source':source,'all_target':target,'inlier_flags':flags,
                              'aligned':aligned,'mask':mask}
     return result
 
@@ -225,6 +234,32 @@ def _visible_texture(gray):
     return np.clip(127.5+band/scale*110,0,255).astype(np.uint8)
 
 
+def _pair_indices(flags,limit=60):
+    """The same bounded selection is drawn before/after RANSAC; never invent pairs."""
+    if len(flags)<=limit:return np.arange(len(flags))
+    kept=np.flatnonzero(flags);rejected=np.flatnonzero(~flags)
+    rejected_count=min(len(rejected),limit//3)
+    kept_count=min(len(kept),limit-rejected_count)
+    rejected_count=min(len(rejected),limit-kept_count)
+    def take(values,count):
+        return values[np.linspace(0,len(values)-1,count,dtype=int)] if count else np.array([],dtype=int)
+    return np.sort(np.concatenate([take(kept,kept_count),take(rejected,rejected_count)]))
+
+
+def _pair_view(query_gray,reference_gray,source,target,selected,flags=None):
+    view=np.hstack([cv2.cvtColor(query_gray,cv2.COLOR_GRAY2BGR),
+                    cv2.cvtColor(reference_gray,cv2.COLOR_GRAY2BGR)])
+    offset=query_gray.shape[1]
+    for index in selected:
+        color=(210,140,40) if flags is None else ((70,200,50) if flags[index] else (60,65,220))
+        a=tuple(np.rint(source[index]).astype(int))
+        b=tuple(np.rint(target[index]+[offset,0]).astype(int))
+        cv2.line(view,a,b,color,1,cv2.LINE_AA)
+        cv2.circle(view,a,3,color,1,cv2.LINE_AA)
+        cv2.circle(view,b,3,color,1,cv2.LINE_AA)
+    return view
+
+
 def build_analysis(sample,eligible=True,quality_message=None,decision=None,
                    reference=None,geometry=None,threshold=.64,margin=.08):
     """Ephemeral images for explanation; no raw uploads or diagnostics are saved.
@@ -237,15 +272,20 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
     stage2=_stage('gray','2. Chọn vùng vân',
         'Vùng giữa 512 × 358 pixel được chuyển sang xám. Chữ và viền ở mép nằm ngoài vùng này.',sample.gray)
     enhanced=_visible_texture(sample.gray)
-    stage3=_stage('texture','3. Làm rõ biến đổi sáng tối',
+    fine,coarse=gaussian_layers(sample.gray)
+    gaussian_fine=_stage('gaussian_fine','3. Gaussian nhẹ (σ = 0,8)',
+        'Làm mờ có trọng số: điểm gần tâm được tính nhiều hơn. Sigma 0,8 giữ lại nhiều chi tiết nhỏ. Đây là một trong hai ảnh số thực được dùng để lấy hiệu; ảnh xem được làm tròn về 8 bit, chưa tăng tương phản.',np.rint(np.clip(fine,0,1)*255).astype(np.uint8))
+    gaussian_coarse=_stage('gaussian_coarse','4. Gaussian mạnh (σ = 4)',
+        'Cùng vùng giấy nhưng làm mờ rộng hơn với sigma 4, nên nền sáng tối lớn còn lại rõ hơn các chi tiết nhỏ. So với bước trước sẽ thấy ảnh mượt hơn. Phép lấy hiệu dùng giá trị số thực, không dùng hai ảnh xem đã làm tròn.',np.rint(np.clip(coarse,0,1)*255).astype(np.uint8))
+    stage3=_stage('texture','5. Hiệu hai ảnh Gaussian (DoG)',
         'Lấy chênh lệch hai ảnh làm mờ Gaussian (sigma 0,8 và 4). Ảnh xem đã tăng tương phản theo từng ảnh để dễ quan sát; không tạo thêm chi tiết hay chứng minh đây là sợi giấy.',enhanced)
     points_view=cv2.cvtColor(enhanced,cv2.COLOR_GRAY2BGR)
     displayed=min(350,len(sample.points))
     for point in sample.points[:displayed]:
         cv2.circle(points_view,tuple(np.rint(point).astype(int)),3,(90,220,70),1,cv2.LINE_AA)
-    stage4=_stage('features','4. Tìm điểm đặc trưng',
+    stage4=_stage('features','6. Tìm điểm đặc trưng SIFT',
         f'Tìm được {len(sample.points)} điểm SIFT. Hình khoanh {displayed} điểm có thật (hiển thị tối đa 350); đây là chi tiết ảnh để đối chiếu, không phải phân đoạn từng sợi giấy.',points_view)
-    analysis={'version':1,'stages':[stage1,stage2,stage3,stage4],
+    analysis={'version':1,'stages':[stage1,stage2,gaussian_fine,gaussian_coarse,stage3,stage4],
               'quality':sample.quality,'eligible':eligible,'quality_message':quality_message}
     if decision is not None:
         status=decision['status']
@@ -255,6 +295,21 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
         analysis['decision']=summary
     else:status=None
     if status!='matched' or reference is None or geometry is None:return analysis
+
+    all_source,all_target=geometry['all_source'],geometry['all_target']
+    inlier_flags=geometry['inlier_flags']
+    selected_pairs=_pair_indices(inlier_flags)
+    kept=int(inlier_flags.sum());rejected=int(len(inlier_flags)-kept)
+    shown_kept=int(inlier_flags[selected_pairs].sum());shown_rejected=int(len(selected_pairs)-shown_kept)
+    analysis['ransac']={'candidate_pairs':len(inlier_flags),'inliers':kept,'outliers':rejected,
+                        'displayed_inliers':shown_kept,'displayed_outliers':shown_rejected,
+                        'max_iterations':RANSAC_MAX_ITERATIONS,'reprojection_threshold_px':RANSAC_ERROR_PX}
+    analysis['stages'].append(_stage('matches_raw','7. Ghép cặp trước RANSAC',
+        f'Trái là ảnh chụp, phải là mẫu khớp. Có {len(inlier_flags)} cặp ứng viên sau so mô tả SIFT, lọc tỷ lệ 0,72 và giữ một cặp cho mỗi điểm mẫu. Vẽ {len(selected_pairs)} cặp thực, tối đa 60; màu xanh lam chưa nói cặp đó phù hợp hình học. Bước sau dùng đúng các cặp đang vẽ để phân loại.',
+        _pair_view(sample.gray,reference.gray,all_source,all_target,selected_pairs)))
+    analysis['stages'].append(_stage('ransac','8. RANSAC giữ và loại cặp điểm',
+        f'RANSAC thử các nhóm điểm để tìm một phép biến đổi phối cảnh được nhiều cặp cùng tuân theo. Mặt nạ kết quả của chính lần so này giữ {kept} cặp và loại {rejected} cặp. Trên hình: {shown_kept} cặp xanh lá được giữ, {shown_rejected} cặp đỏ bị loại. Ngưỡng sai số 3 pixel; 2.000 là giới hạn vòng thử, không phải số vòng đã ghi nhận. Không dựng lại các vòng thử bên trong thư viện.',
+        _pair_view(sample.gray,reference.gray,all_source,all_target,selected_pairs,inlier_flags)))
 
     left=cv2.cvtColor(sample.gray,cv2.COLOR_GRAY2BGR)
     right=cv2.cvtColor(reference.gray,cv2.COLOR_GRAY2BGR)
@@ -267,17 +322,17 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
         cv2.line(correspondences,a,b,(90,210,50),1,cv2.LINE_AA)
         cv2.circle(correspondences,a,3,(30,150,20),1,cv2.LINE_AA)
         cv2.circle(correspondences,b,3,(30,150,20),1,cv2.LINE_AA)
-    analysis['stages'].append(_stage('correspondences','5. Nối chi tiết tương ứng',
+    analysis['stages'].append(_stage('correspondences','9. Các cặp được giữ',
         f'Trái: ảnh bạn chụp. Phải: mẫu được nhận khớp. Có {len(source)} điểm phù hợp hình học sau RANSAC; hình nối {len(selected)} cặp có thật, tối đa 60 cặp. Ảnh mẫu chỉ hiện khi đã nhận khớp duy nhất.',correspondences))
     aligned=geometry['aligned'];mask=geometry['mask']
     aligned_view=cv2.cvtColor(aligned,cv2.COLOR_GRAY2BGR)
     aligned_view[~mask]=(72,72,72)
-    analysis['stages'].append(_stage('aligned','6. Căn hai vùng để đối chiếu',
+    analysis['stages'].append(_stage('aligned','10. Căn hai vùng để đối chiếu',
         'Trái: ảnh chụp đã căn theo mẫu. Phải: ảnh mẫu. Phần xám đậm bên trái nằm ngoài vùng được so. Điểm so khớp dùng tương quan vân trên vùng hợp lệ.',np.hstack([aligned_view,right])))
     diff=np.abs(texture(aligned)-texture(reference.gray))
     scale=float(np.percentile(diff[mask],99))
     display=np.clip(diff/max(scale,1e-8)*255,0,255).astype(np.uint8)
     heatmap=cv2.applyColorMap(display,cv2.COLORMAP_INFERNO);heatmap[~mask]=(72,72,72)
-    analysis['stages'].append(_stage('difference','7. Quan sát phần khác nhau',
+    analysis['stages'].append(_stage('difference','11. Quan sát phần khác nhau',
         'Ảnh phụ minh họa độ chênh tuyệt đối giữa hai vùng vân đã căn: màu sáng hơn là chênh lớn hơn trong ảnh này; vùng xám nằm ngoài phép so. Màu đã tăng tương phản tương đối, không phải xác suất thật/giả và không thay công thức NCC đang ra quyết định.',heatmap))
     return analysis

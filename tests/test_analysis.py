@@ -14,6 +14,11 @@ from matcher import prepare, texture
 from server import create_app
 from test_app import make_paper, payload, register, scene
 
+QUERY_STAGE_ORDER = ['rectified', 'gray', 'gaussian_fine', 'gaussian_coarse',
+                     'texture', 'features']
+MATCH_STAGE_ORDER = QUERY_STAGE_ORDER + ['matches_raw', 'ransac',
+                                        'correspondences', 'aligned', 'difference']
+
 
 @pytest.fixture
 def analysis_client(tmp_path, monkeypatch):
@@ -38,7 +43,7 @@ def stages_of(analysis):
     assert analysis['version'] == 1
     stages = {stage['id']: stage for stage in analysis['stages']}
     assert len(stages) == len(analysis['stages']), 'Stage ids must be unique.'
-    assert {'rectified', 'gray', 'texture', 'features'} <= stages.keys()
+    assert set(QUERY_STAGE_ORDER) <= stages.keys()
     for stage in stages.values():
         decode_stage(stage)
     return stages
@@ -46,7 +51,9 @@ def stages_of(analysis):
 
 def assert_query_only(analysis, registered_id=None):
     stages = stages_of(analysis)
-    assert not {'correspondences', 'aligned', 'difference', 'reference'} & stages.keys()
+    assert list(stages) == QUERY_STAGE_ORDER
+    assert not {'matches_raw', 'ransac', 'correspondences', 'aligned', 'difference', 'reference'} & stages.keys()
+    assert 'ransac' not in analysis, 'Rejected matches must not reveal reference-derived statistics.'
     forbidden = {'product', 'product_id', 'reference_id', 'reference_image',
                  'candidate', 'candidates', 'match'}
 
@@ -89,7 +96,8 @@ def test_inspect_visuals_are_actual_rectified_pixels(analysis_client):
     assert analysis['quality'] == sample.quality
     assert analysis['quality_message'] is None or isinstance(analysis['quality_message'], str)
     assert (stages['rectified']['width'], stages['rectified']['height']) == (640, 448)
-    for stage_id in ['gray', 'texture', 'features']:
+    assert list(stages) == QUERY_STAGE_ORDER
+    for stage_id in QUERY_STAGE_ORDER[1:]:
         assert (stages[stage_id]['width'], stages[stage_id]['height']) == (512, 358)
     np.testing.assert_array_equal(decode_stage(stages['rectified']), sample.image)
     np.testing.assert_array_equal(decode_stage(stages['gray']), sample.gray)
@@ -127,7 +135,7 @@ def test_match_visuals_agree_with_decision_and_stay_bounded(analysis_client):
     assert result['status'] == 'matched'
     analysis = result['analysis']
     stages = stages_of(analysis)
-    assert {'correspondences', 'aligned', 'difference'} <= stages.keys()
+    assert list(stages) == MATCH_STAGE_ORDER
     assert analysis['decision']['status'] == 'matched'
     assert analysis['decision']['score'] == result['match']['score']
     assert analysis['decision']['inliers'] == result['match']['inliers']
@@ -138,11 +146,13 @@ def test_match_visuals_agree_with_decision_and_stay_bounded(analysis_client):
     assert analysis['decision']['margin'] == .08
     assert stages['correspondences']['width'] == 1024
     assert stages['correspondences']['height'] == 358
+    for stage_id in ['matches_raw', 'ransac']:
+        assert (stages[stage_id]['width'], stages[stage_id]['height']) == (1024, 358)
     # Like correspondences, this panel places the aligned query and reference
     # beside each other so the user can inspect the same regions directly.
     assert (stages['aligned']['width'], stages['aligned']['height']) == (1024, 358)
     assert (stages['difference']['width'], stages['difference']['height']) == (512, 358)
-    assert len(response.data) < 3_000_000, 'Opt-in visuals should be practical on mobile Wi-Fi.'
+    assert len(response.data) < 4_500_000, 'The eleven opt-in visuals should stay bounded for mobile Wi-Fi.'
 
 
 def test_empty_database_analysis_shows_only_query(analysis_client):
@@ -188,3 +198,84 @@ def test_ambiguous_match_does_not_expose_either_reference(analysis_client):
     assert response.json['analysis']['decision']['status'] == 'ambiguous'
     assert_query_only(response.json['analysis'], registered.json['product']['id'])
     assert second_id not in json.dumps(response.json['analysis'])
+
+
+@pytest.mark.parametrize('stage_id,sigma', [('gaussian_fine', .8), ('gaussian_coarse', 4.0)])
+def test_gaussian_visual_is_the_actual_processing_blur(analysis_client, stage_id, sigma):
+    image = scene(make_paper(12), changed=True)
+    sample = prepare(image)
+    response = analysis_client.post('/api/inspect', json={**payload(image), 'explain': True})
+    assert response.status_code == 200, response.json
+    stages = stages_of(response.json['analysis'])
+    actual = decode_stage(stages[stage_id])
+    assert actual.shape == sample.gray.shape, 'Gaussian stages must remain genuine grayscale images.'
+    float_blur = cv2.GaussianBlur(sample.gray.astype(np.float32) / 255, (0, 0), sigma)
+    expected = np.clip(np.rint(float_blur * 255), 0, 255).astype(np.uint8)
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.var() < sample.gray.var()
+
+
+def test_ransac_statistics_and_rejected_lines_come_from_the_actual_mask(analysis_client, monkeypatch):
+    reference = make_paper(12)
+    registered = register(analysis_client, scene(reference))
+    assert registered.status_code == 201, registered.json
+    # Moving an actual patch supplies plausible descriptor pairs at geometrically
+    # wrong positions, rather than injecting a fabricated outlier mask.
+    altered = reference.copy()
+    moved_patch = altered[100:200, 120:260].copy()
+    altered[100:200, 120:260] = 220
+    altered[300:400, 400:540] = moved_patch
+    original_find = cv2.findHomography
+    calls = []
+
+    def record_actual_ransac(*args, **kwargs):
+        homography, inlier_mask = original_find(*args, **kwargs)
+        calls.append({'source': args[0].copy(), 'target': args[1].copy(),
+                      'flags': inlier_mask.copy().ravel().astype(bool),
+                      'method': args[2], 'threshold': args[3],
+                      'max_iterations': kwargs['maxIters']})
+        return homography, inlier_mask
+
+    monkeypatch.setattr(cv2, 'findHomography', record_actual_ransac)
+    response = analysis_client.post('/api/match', json={
+        **payload(scene(altered, changed=True)), 'explain': True})
+    assert response.status_code == 200, response.json
+    assert response.json['status'] == 'matched'
+    assert len(calls) == 1, 'Visualization must use the decision pass, not run a second RANSAC.'
+    actual = calls[0]
+    flags = actual['flags']
+    assert flags.any() and (~flags).any(), 'The fixture must exercise accepted and rejected real pairs.'
+    analysis = response.json['analysis']
+    stats = analysis['ransac']
+    assert stats['candidate_pairs'] == len(actual['source']) == len(flags)
+    assert stats['inliers'] == int(flags.sum()) == response.json['match']['inliers']
+    assert stats['outliers'] == int((~flags).sum())
+    assert stats['candidate_pairs'] == stats['inliers'] + stats['outliers']
+    assert 0 < stats['displayed_inliers'] <= stats['inliers']
+    assert 0 < stats['displayed_outliers'] <= stats['outliers']
+    assert stats['displayed_inliers'] + stats['displayed_outliers'] <= 60
+    assert stats['reprojection_threshold_px'] == actual['threshold'] == 3.0
+    assert stats['max_iterations'] == actual['max_iterations'] == 2000
+    assert actual['method'] == cv2.RANSAC
+    # OpenCV returns a final mask but no iteration history; don't invent one.
+    assert not {'iterations', 'iteration_history', 'iteration_trace'} & stats.keys()
+    ransac_panel = decode_stage(stages_of(analysis)['ransac'])
+    b, g, r = [channel.astype(np.int16) for channel in cv2.split(ransac_panel)]
+    assert np.any((r > 120) & (r > g + 40) & (r > b + 40)), 'Rejected pairs need visible red marks.'
+
+
+def test_explaining_does_not_change_the_matching_decision(analysis_client):
+    registered = register(analysis_client, scene(make_paper(12)))
+    assert registered.status_code == 201, registered.json
+    data = payload(scene(make_paper(12), changed=True))
+    cv2.setRNGSeed(17)
+    plain = analysis_client.post('/api/match', json=data)
+    cv2.setRNGSeed(17)
+    explained = analysis_client.post('/api/match', json={**data, 'explain': True})
+    assert plain.status_code == explained.status_code == 200
+    assert plain.json['status'] == explained.json['status'] == 'matched'
+    assert plain.json['match'] == explained.json['match']
+    assert plain.json['quality'] == explained.json['quality']
+    assert plain.json['product'] == explained.json['product']
+    assert 'analysis' not in plain.json
+    assert 'analysis' in explained.json
