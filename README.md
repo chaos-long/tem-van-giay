@@ -10,10 +10,11 @@ Web nghiên cứu nhận diện tem hình chữ nhật cho đồ thủ công tá
 - Trả hồ sơ chỉ khi có một mẫu đạt điều kiện so khớp.
 - Lưu tên/mã sản phẩm, nguồn vật liệu, ngày thu gom, người làm, sử dụng nguồn thu và ghi chú bằng chứng.
 - Sao lưu dữ liệu; nạp dữ liệu **mô phỏng** để kiểm tra thao tác.
+- **Xem cách nhận diện:** ảnh căn thẳng, vùng xám, vân đã tăng tương phản và các điểm SIFT thực sự tìm thấy. Khi khớp duy nhất, hiện thêm cặp điểm RANSAC, hai vùng đã căn và ảnh chênh lệch.
 
 ## Trạng thái
 
-Mã nguồn và bản thử nghiệm cục bộ đã kiểm tra. Giao diện có workflow GitHub Pages. Để tra cứu từ nhiều thiết bị qua Internet, cần cấu hình máy chủ HTTPS và cơ sở dữ liệu trực tuyến. Đừng coi việc giao diện đã mở được trên Pages là cơ sở dữ liệu đã hoạt động.
+Giao diện tại https://chaos-long.github.io/tem-van-giay/ đã cấu hình API https://tem-van-giay.onrender.com. Khi tự triển khai một bản khác, làm theo DEPLOY.md để cấu hình dịch vụ và cơ sở dữ liệu của bạn. Không đưa khóa quản lý hoặc khóa Supabase vào web.
 
 ## Kiến trúc triển khai
 
@@ -46,6 +47,14 @@ Dùng giấy đã qua sử dụng, bề mặt mờ. Vùng chữ nhật trung tâ
 Tìm bốn góc → căn ảnh về 640 × 448 pixel → bỏ khoảng 10% mép → kiểm tra chi tiết → tìm điểm SIFT và đối chiếu hình học bằng RANSAC → so tương quan vân sau căn ảnh → xét ngưỡng và độ tách biệt với mẫu đứng thứ hai → trả hồ sơ khi đạt.
 
 Đây là bản tự triển khai dùng SIFT và lọc chênh lệch Gaussian, không phải ứng dụng chính thức của bài Berchtold 2021. Các ngưỡng là tham số thử nghiệm, cần hiệu chỉnh trên giấy thật.
+
+## Xem cách nhận diện (0.2)
+
+Chọn/chụp ảnh ở Kiểm tra tem, rồi kéo xuống **Xem cách nhận diện**. Bấm các bước hoặc nút Trước/Tiếp để xem ảnh từ chính lần xử lý đó. Các ảnh tăng tương phản chỉ phục vụ quan sát; thuật toán vẫn dùng giá trị lọc gốc. Vòng tròn là điểm đặc trưng ảnh, không phải máy đã nhìn thấy và đếm từng sợi giấy. Nếu chất lượng kém nhưng đã tìm được tem, vẫn hiện các ảnh giúp hiểu vì sao cần chụp lại.
+
+Sau một kết quả khớp duy nhất, bước 5 nối tối đa 60 cặp điểm thực sự phù hợp hình học, bước 6 đặt ảnh chụp đã căn cạnh mẫu và bước 7 biểu diễn độ chênh tuyệt đối của vùng vân. Ảnh chênh là minh họa phụ, không thay công thức tương quan và không thể hiện xác suất thật/giả. Không công bố ảnh mẫu hoặc ứng viên khi kết quả không khớp/chưa phân biệt được.
+
+API `/api/inspect` và `/api/match` nhận `explain: true` để thêm trường `analysis`; bỏ cờ này giữ phản hồi gọn như trước. Ảnh minh họa chỉ tồn tại trong phản hồi và trình duyệt, không lưu vào cơ sở dữ liệu. Bản 0.2 giữ nguyên các ngưỡng và điều kiện nhận khớp. Khả năng chống sao chép vật lý vẫn chưa được chứng minh.
 
 ## Giới hạn
 

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tem Vân Giấy</title><link rel="stylesheet" href="style.css"></head>
 <body>
-<aside class="sidebar"><a class="brand" href="./" aria-label="Tem Vân Giấy"><span class="brand-icon">V</span><span>Tem Vân Giấy<small>Câu chuyện có căn cứ</small></span></a><nav><button class="nav active" data-view="scan">◎ <span>Kiểm tra tem</span></button><button class="nav" data-view="manage">▤ <span>Quản lý mẫu</span></button><button class="nav" data-view="connect">⌁ <span>Kết nối</span></button></nav><div class="sidebar-bottom"><span class="dot"></span> Bản thử nghiệm 0.1<small>Nhận diện ảnh tem đã đăng ký</small></div></aside>
+<aside class="sidebar"><a class="brand" href="./" aria-label="Tem Vân Giấy"><span class="brand-icon">V</span><span>Tem Vân Giấy<small>Câu chuyện có căn cứ</small></span></a><nav><button class="nav active" data-view="scan">◎ <span>Kiểm tra tem</span></button><button class="nav" data-view="manage">▤ <span>Quản lý mẫu</span></button><button class="nav" data-view="connect">⌁ <span>Kết nối</span></button></nav><div class="sidebar-bottom"><span class="dot"></span> Bản thử nghiệm 0.2<small>Nhận diện ảnh tem đã đăng ký</small></div></aside>
 <main>
 <header><span class="eyebrow">TỪ GIẤY BỎ ĐI, ĐẾN CÂU CHUYỆN SẢN PHẨM</span><span id="connectionStatus" class="badge">Đang kết nối…</span></header>
 <section id="scanView" class="view">
@@ -16,6 +16,18 @@
 <button id="matchButton" class="button primary wide" disabled>Tìm sản phẩm khớp</button>
 </section>
 <section class="panel result-panel"><div class="panel-head"><h2>Kết quả tra cứu</h2><span class="subtle">Hồ sơ sản phẩm</span></div><div id="result" class="result-empty"><span class="result-symbol">↗</span><h3>Câu chuyện phía sau chiếc tem</h3><p>Khi tìm được mẫu khớp, thông tin vật liệu, người làm và sử dụng nguồn thu sẽ xuất hiện ở đây.</p><div class="mini-labels"><span>Nguồn vật liệu</span><span>Người làm</span><span>Nguồn thu</span></div></div></section></div>
+<section class="panel algorithm-panel" aria-labelledby="algorithmTitle">
+<div class="panel-head"><div><span class="algorithm-eyebrow">TỪ ẢNH CHỤP ĐẾN ĐIỂM SO KHỚP</span><h2 id="algorithmTitle">Xem cách nhận diện</h2></div><span id="analysisState" class="badge">Chưa có ảnh</span></div>
+<p class="algorithm-intro">Mở từng bước để xem vùng giấy và những chi tiết thuật toán thực sự sử dụng trong lần xử lý này.</p>
+<div id="analysisEmpty" class="analysis-empty"><span aria-hidden="true">01 → 02 → 03 → 04</span><p id="analysisEmptyText">Chọn ảnh hoặc chụp tem để xem ảnh đã căn thẳng, vân giấy và các điểm đặc trưng.</p></div>
+<div id="analysisContent" hidden>
+<ol id="analysisSteps" class="analysis-steps" aria-label="Các bước xử lý ảnh"></ol>
+<div class="analysis-layout">
+<figure class="analysis-figure"><div class="analysis-image-wrap"><img id="analysisImage" alt=""></div><figcaption id="analysisCaption"></figcaption></figure>
+<div class="analysis-explanation"><span id="analysisStepNumber" class="analysis-step-number"></span><h3 id="analysisStepTitle"></h3><p id="analysisDescription"></p><div class="analysis-navigation"><button id="analysisPrevious" class="button secondary" type="button">← Bước trước</button><button id="analysisNext" class="button secondary" type="button">Bước sau →</button></div><section class="analysis-quality" aria-labelledby="analysisQualityTitle"><h4 id="analysisQualityTitle">Chi tiết đo từ ảnh này</h4><dl id="analysisMetrics"></dl></section><div id="analysisDecision" class="analysis-decision" hidden></div></div>
+</div>
+<p class="analysis-note">Ảnh vân được tăng tương phản để dễ nhìn; thao tác này không tạo thêm chi tiết. Điểm so khớp không phải xác suất sản phẩm thật. Phần minh họa chưa chứng minh khả năng chống sao chép ảnh hoặc in lại tem.</p>
+</div></section>
 <div class="tip"><strong>Mẫu tem phù hợp:</strong> một khung chữ nhật, vùng vân sạch ở giữa. Đặt QR và chữ ngoài vùng vân. Khả năng so khớp cần được thử trên giấy thật của nhóm.</div>
 </section>
 <section id="manageView" class="view" hidden><div class="page-title"><h1>Đăng ký tem và sản phẩm</h1><p>Chỉ người có khóa quản lý được thêm, sửa hoặc xóa mẫu.</p></div>

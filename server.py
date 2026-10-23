@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
-from matcher import ImageProblem, Sample, decode_image, encode_image, prepare, decide, features
+from matcher import ImageProblem, Sample, decode_image, encode_image, prepare, decide, features, build_analysis
 
 FIELDS=['product_name','product_code','description','material_source','collection_date','maker','revenue_use','evidence_note']
 
@@ -116,7 +116,10 @@ def create_app(data_dir=None,admin_token=None):
             response.headers['Access-Control-Allow-Private-Network']='true'
         return response
     @app.errorhandler(ImageProblem)
-    def image_problem(exc):return jsonify(status='quality_error',message=str(exc)),422
+    def image_problem(exc):
+        result={'status':'quality_error','message':str(exc)}
+        if exc.analysis is not None:result['analysis']=exc.analysis
+        return jsonify(result),422
     @app.errorhandler(413)
     def too_large(exc):return jsonify(status='error',message='Ảnh quá lớn. Chọn ảnh dưới 12 MB.'),413
     @app.errorhandler(400)
@@ -145,7 +148,7 @@ def create_app(data_dir=None,admin_token=None):
     def assets(filename):return send_from_directory(static,filename)
     @app.get('/api/health')
     def health():
-        return jsonify(status='ok',version='0.1.0',product_count=len(db.rows()),threshold=config['threshold'],margin=config['margin'])
+        return jsonify(status='ok',version='0.2.0',product_count=len(db.rows()),threshold=config['threshold'],margin=config['margin'])
     @app.post('/api/admin/login')
     @admin
     def login():return jsonify(status='ok')
@@ -154,8 +157,11 @@ def create_app(data_dir=None,admin_token=None):
     def products():return jsonify(products=[db.product(row) for row in db.rows()])
     @app.post('/api/inspect')
     def inspect():
-        data=body();sample=prepare(decode_image(data.get('image')),data.get('corners'))
-        return jsonify(status='ready',preview=encode_image(sample.image),quality=sample.quality,corners=sample.corners)
+        data=body();explain=data.get('explain') is True
+        sample=prepare(decode_image(data.get('image')),data.get('corners'),explain=explain)
+        result={'status':'ready','preview':encode_image(sample.image),'quality':sample.quality,'corners':sample.corners}
+        if explain:result['analysis']=build_analysis(sample)
+        return jsonify(result)
     @app.post('/api/products')
     @admin
     def register():
@@ -182,15 +188,23 @@ def create_app(data_dir=None,admin_token=None):
     def match():
         if not app.match_lock.acquire(blocking=False):return jsonify(status='busy',message='Máy chủ đang xử lý ảnh khác. Thử lại sau vài giây.'),429
         try:
-            data=body();sample=prepare(decode_image(data.get('image')),data.get('corners'))
+            data=body();explain=data.get('explain') is True
+            sample=prepare(decode_image(data.get('image')),data.get('corners'),explain=explain)
             refs=db.references()
-            if not refs:return jsonify(status='empty',message='Chưa có tem nào trong cơ sở dữ liệu. Người quản lý cần đăng ký tem mẫu trước.')
+            if not refs:
+                result={'status':'empty','message':'Chưa có tem nào trong cơ sở dữ liệu. Người quản lý cần đăng ký tem mẫu trước.'}
+                if explain:result['analysis']=build_analysis(sample,decision=result,threshold=config['threshold'],margin=config['margin'])
+                return jsonify(result)
             started=time.monotonic()
-            result=decide(sample,refs,config['threshold'],config['margin'])
+            result=decide(sample,refs,config['threshold'],config['margin'],diagnostics=explain)
+            geometry=result.pop('_geometry',None)
             product_id=result.get('match',{}).get('product_id')
             if result['status']=='matched':
                 row=next(row for row in db.rows() if row['id']==product_id)
                 result['product']=db.product(row)
+            if explain:
+                reference=next((ref for pid,ref in refs if pid==product_id),None)
+                result['analysis']=build_analysis(sample,decision=result,reference=reference,geometry=geometry,threshold=config['threshold'],margin=config['margin'])
             result['preview']=encode_image(sample.image)
             result['elapsed_ms']=round((time.monotonic()-started)*1000)
             try:db.log_scan(result['status'],product_id,result.get('match',{}).get('score'))
