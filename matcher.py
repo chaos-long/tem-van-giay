@@ -186,7 +186,10 @@ def correlation(a,b):
     denom=float(np.linalg.norm(a)*np.linalg.norm(b))
     return float(np.dot(a,b)/denom) if denom>1e-8 else 0.0
 
-def compare(query,reference,diagnostics=False):
+def compare(query,reference,diagnostics=False,failure_reasons=None):
+    def reject(reason):
+        if failure_reasons is not None:failure_reasons.append(reason)
+        return None
     matcher=cv2.BFMatcher(cv2.NORM_L2)
     pairs=matcher.knnMatch(query.descriptors,reference.descriptors,k=2)
     good=[a for pair in pairs if len(pair)==2 for a,b in [pair] if a.distance < .72*b.distance]
@@ -195,24 +198,24 @@ def compare(query,reference,diagnostics=False):
     for m in sorted(good,key=lambda m:m.distance):
         unique.setdefault(m.trainIdx,m)
     good=list(unique.values())
-    if len(good)<14:return None
+    if len(good)<14:return reject('features')
     source=np.float32([query.points[m.queryIdx] for m in good])
     target=np.float32([reference.points[m.trainIdx] for m in good])
     homography,inlier_mask=cv2.findHomography(source,target,cv2.RANSAC,RANSAC_ERROR_PX,maxIters=RANSAC_MAX_ITERATIONS)
-    if homography is None or inlier_mask is None or not np.isfinite(homography).all():return None
+    if homography is None or inlier_mask is None or not np.isfinite(homography).all():return reject('geometry')
     flags=inlier_mask.ravel().astype(bool);inliers=int(flags.sum())
-    if inliers<14 or inliers/len(good)<.45:return None
+    if inliers<14 or inliers/len(good)<.45:return reject('geometry')
     h,w=reference.gray.shape
     rect=np.float32([[0,0],[w,0],[w,h],[0,h]]).reshape(-1,1,2)
     mapped=cv2.perspectiveTransform(rect,homography)[:,0,:]
     area=abs(cv2.contourArea(mapped))
-    if not cv2.isContourConvex(mapped.astype(np.int32)) or not .55*w*h<area<1.7*w*h:return None
+    if not cv2.isContourConvex(mapped.astype(np.int32)) or not .55*w*h<area<1.7*w*h:return reject('geometry')
     coverage=len({(min(2,int(p[0]/w*3)),min(2,int(p[1]/h*3))) for p in target[flags]})
-    if coverage<4:return None
+    if coverage<4:return reject('coverage')
     aligned=cv2.warpPerspective(query.gray,homography,(w,h))
     mask=cv2.warpPerspective(np.ones(query.gray.shape,np.uint8),homography,(w,h))>0
     mask[:12]=False;mask[-12:]=False;mask[:,:12]=False;mask[:,-12:]=False
-    if float(mask.mean())<.55:return None
+    if float(mask.mean())<.55:return reject('overlap')
     a=texture(aligned);b=texture(reference.gray)
     values=[]
     for y in range(3):
@@ -220,7 +223,7 @@ def compare(query,reference,diagnostics=False):
             sl=(slice(y*h//3,(y+1)*h//3),slice(x*w//3,(x+1)*w//3))
             valid=mask[sl]
             if valid.mean()>.70:values.append(correlation(a[sl][valid],b[sl][valid]))
-    if len(values)<6:return None
+    if len(values)<6:return reject('overlap')
     median=float(np.median(values));overall=correlation(a[mask],b[mask])
     score=.7*median+.3*overall
     result={'score':round(max(0,score),4),'inliers':inliers,'coverage_tiles':coverage,'median_texture':round(median,4)}
@@ -234,9 +237,10 @@ def compare(query,reference,diagnostics=False):
 
 def decide(query,records,threshold=.64,margin=.08,diagnostics=False):
     candidates=[]
+    failure_reasons=[]
     best_geometry=None;best_score=-1.0
     for product_id,reference in records:
-        result=compare(query,reference,diagnostics=diagnostics)
+        result=compare(query,reference,diagnostics=diagnostics,failure_reasons=failure_reasons)
         if result:
             geometry=result.pop('_geometry',None)
             if result['score']>best_score:
@@ -244,7 +248,16 @@ def decide(query,records,threshold=.64,margin=.08,diagnostics=False):
             candidates.append({'product_id':product_id,**result})
     candidates.sort(key=lambda item:item['score'],reverse=True)
     if not candidates or candidates[0]['score']<threshold:
-        return {'status':'no_match','message':'Chưa tìm thấy ảnh tem khớp trong cơ sở dữ liệu.','quality':query.quality}
+        order={'features':0,'geometry':1,'coverage':2,'overlap':3,'texture':4}
+        reason='texture' if candidates else max(failure_reasons,key=lambda code:order[code],default='features')
+        hints={
+            'features':'Chưa tìm đủ chi tiết ảnh tương ứng. Chụp đúng cùng mặt giấy đã đăng ký, gần hơn, lấy nét vào vân và dùng ánh sáng đều.',
+            'geometry':'Các cặp chi tiết chưa cho phép căn ảnh ổn định. Đặt giấy phẳng, giữ đủ bốn góc và tránh chụp quá nghiêng.',
+            'coverage':'Các điểm phù hợp chỉ nằm trên một vùng quá nhỏ. Chụp rõ toàn vùng giấy, tránh che khuất hoặc chỉ lấy một góc.',
+            'overlap':'Các vùng sau căn chưa chồng lên nhau đủ. Kiểm tra viền xanh; chọn lại bốn góc nếu viền đang bám vào nền hoặc bóng.',
+            'texture':'Đã căn được ít nhất một ứng viên nhưng vân sau căn chưa đủ giống. Chụp cùng mặt giấy, đặt phẳng, tránh lóa và giữ ảnh chụp lại để nhóm kiểm tra.'}
+        return {'status':'no_match','message':'Chưa tìm thấy ảnh tem khớp trong cơ sở dữ liệu.',
+                'reason_code':reason,'capture_hint':hints[reason],'quality':query.quality}
     best=candidates[0]
     if len(candidates)>1 and best['score']-candidates[1]['score']<margin:
         return {'status':'ambiguous','message':'Có nhiều mẫu gần giống nhau. Chưa đủ căn cứ để trả thông tin sản phẩm.','quality':query.quality}
@@ -325,6 +338,7 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
     if decision is not None:
         status=decision['status']
         summary={'status':status,'threshold':threshold,'margin':margin}
+        if decision.get('capture_hint'):summary['message']=decision['capture_hint']
         if status=='matched':
             summary.update({k:decision['match'][k] for k in ['score','inliers','coverage_tiles']})
         analysis['decision']=summary

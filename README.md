@@ -88,3 +88,13 @@ Trong Quản lý mẫu, chọn Nhập nhiều mẫu rồi chọn tệp JSON UTF-
 Giao diện giảm ảnh camera/tải lên về cạnh dài tối đa 1.200 pixel và JPEG chất lượng 90 để giảm thời gian tải. Trên bộ 30 ảnh phát triển, các ảnh giảm cỡ vẫn qua kiểm tra và khớp với PNG tham chiếu; điểm thấp nhất 0,9708 ở phép thử cục bộ. Đây là đối chiếu các bản xử lý của cùng ảnh, chưa thay thế đánh giá bằng ảnh chụp lại. Ảnh nhập hàng loạt không tự bị giảm thêm: dùng dữ liệu đã chuẩn bị trong tệp bộ mẫu.
 
 Máy chủ đọc metadata khi đếm/liệt kê/kiểm tra mã; ảnh tham chiếu còn thiếu mới được tải vào bộ nhớ để so khớp. Mẫu vừa thêm bổ sung vào cache; mẫu đã xóa bị loại khi làm mới danh sách. 37 kiểm thử backend đạt. Trạng thái giai đoạn đăng ký chỉ cho người quản lý xem qua `/api/admin/diagnostics`; không trả khóa hay ảnh. Ngưỡng nhận khớp giữ nguyên.
+
+## Camera điện thoại và kiểm tra ảnh chụp lại (0.5)
+
+- Có nút **Chụp bằng camera điện thoại** dùng file input `capture="environment"`, bên cạnh camera xem trước và tải ảnh. Tùy trình duyệt/thiết bị, nút có thể mở camera hệ thống hoặc trình chọn ảnh; không bảo đảm vượt được mọi lỗi quyền của Android.
+- Nếu Chrome báo lớp phủ, đóng bong bóng chat/cửa sổ nổi/ứng dụng lọc màu và kiểm tra quyền của đúng địa chỉ web. Web không tự tắt ứng dụng khác hoặc tự cấp quyền. Xem [hướng dẫn lớp phủ của Samsung](https://www.samsung.com/us/support/troubleshooting/TSG01001313/) và [HTML capture của MDN](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Attributes/capture).
+- Camera xem trước cố gắng chọn camera sau và lấy nét liên tục khi thiết bị hỗ trợ. Lỗi liệt kê camera không đóng một luồng đang hoạt động; lỗi phát video phải giải phóng luồng camera.
+- Nút **Lưu ảnh đang kiểm tra** lưu chính JPEG dùng cho yêu cầu, không lưu ảnh có vẽ viền xanh. Khi báo lỗi, cung cấp ảnh này cùng mã/ảnh tham chiếu, chụp đúng cùng mặt giấy.
+- Kết quả không khớp có `reason_code` và `capture_hint` theo bước đi xa nhất trong các phép so: thiếu cặp điểm, hình học, phân bố điểm, độ chồng vùng hoặc tương quan vân. Đây là giải thích việc dừng của thuật toán, không xác định nguyên nhân vật lý và không tiết lộ ảnh/mã ứng viên bị loại. Không đổi điểm, ngưỡng 0,64, khoảng cách 0,08 hoặc điều kiện RANSAC để ép nhận.
+
+40 kiểm thử backend và 5 kiểm thử logic camera bằng Node đều đạt. Các kiểm thử camera dùng đối tượng giả lập, chưa phải thử camera Android vật lý. Người dùng báo chụp mới cùng tờ giấy không khớp; chưa có cặp ảnh đăng ký/chụp lại để tái hiện, nên lỗi nhận diện thực tế vẫn cần điều tra. Các kết quả trước trên 30 ảnh và bản biến đổi của cùng ảnh không chứng minh nhận diện ảnh chụp lại.
