@@ -98,3 +98,20 @@ Máy chủ đọc metadata khi đếm/liệt kê/kiểm tra mã; ảnh tham chi�
 - Kết quả không khớp có `reason_code` và `capture_hint` theo bước đi xa nhất trong các phép so: thiếu cặp điểm, hình học, phân bố điểm, độ chồng vùng hoặc tương quan vân. Đây là giải thích việc dừng của thuật toán, không xác định nguyên nhân vật lý và không tiết lộ ảnh/mã ứng viên bị loại. Không đổi điểm, ngưỡng 0,64, khoảng cách 0,08 hoặc điều kiện RANSAC để ép nhận.
 
 40 kiểm thử backend và 5 kiểm thử logic camera bằng Node đều đạt. Các kiểm thử camera dùng đối tượng giả lập, chưa phải thử camera Android vật lý. Người dùng báo chụp mới cùng tờ giấy không khớp; chưa có cặp ảnh đăng ký/chụp lại để tái hiện, nên lỗi nhận diện thực tế vẫn cần điều tra. Các kết quả trước trên 30 ảnh và bản biến đổi của cùng ảnh không chứng minh nhận diện ảnh chụp lại.
+
+
+## Căn tinh ảnh chụp lại (0.6)
+
+Ảnh chụp lại cùng tờ anh06 do người dùng cung cấp ngày 23/10/2026 tái hiện lỗi thật: SIFT/RANSAC có 117 inlier ở 8/9 ô nhưng điểm vân chỉ 0,4898, dưới ngưỡng 0,64. Căn phối cảnh toàn ảnh còn sai lệch nhỏ; giấy cong nhẹ và thay đổi góc chụp có thể góp phần, không kết luận duy nhất nguyên nhân vật lý từ một ảnh.
+
+- Giữ nguyên SIFT, ratio test 0,72, RANSAC 3 pixel, ngưỡng NCC 0,64 và khoảng cách 0,08.
+- Chỉ cân nhắc căn tinh khi đã vượt kiểm tra hình học cũ, có ít nhất 30 inlier, phủ ít nhất 6/9 ô và điểm ban đầu từ 0,20 đến dưới 0,80.
+- ECC tinh chỉnh homography trên DoG, khởi tạo bằng RANSAC. Phải vẫn phù hợp các điểm thật: sai số trung vị tối đa 1,5 pixel, phân vị 90 tối đa 3 pixel; chuyển động góc tối đa 9 pixel. Lỗi hội tụ hoặc vượt giới hạn thì dùng phép căn trước đó.
+- Lưới 5×5 ước lượng dịch cục bộ bằng tương quan, tối đa 3 pixel mỗi nút. Mỗi ô cần ít nhất 3 inlier thật, độ dịch phù hợp phần dư đặc trưng trong 2 pixel. Nội suy thành trường dịch liên tục; lấy mẫu một lần từ ảnh đầu vào để giảm mờ. Chỉ giữ điều chỉnh khi cùng công thức NCC cải thiện.
+- Hình so khớp/ảnh khác biệt dùng ảnh đã căn tinh khi bước này được giữ. Bước 12 tùy chọn hiển thị ảnh trước/sau, điểm số, số ô và giới hạn dịch thực. Thống kê RANSAC vẫn dùng mặt nạ RANSAC gốc; không dựng thêm điểm giả.
+
+Kiểm chứng cục bộ: ảnh mới nhận N01-MAU-006 với điểm 0,6916; bốn biến thể thu nhỏ/nén của chính ảnh mới đều nhận đúng (0,6437–0,6825). So ảnh mới với đủ 33 tham chiếu; chỉ mẫu 006 vượt kiểm tra hình học. 435 cặp giữa 30 ảnh tham chiếu không có cặp đạt 0,64 trong lượt thử. Đây là dữ liệu phát triển, không phải ước lượng tỷ lệ nhận sai độc lập; một biến thể chỉ vừa qua ngưỡng nên chưa bảo đảm mọi camera/góc/ánh sáng. Không thêm ảnh chụp mới vào cơ sở dữ liệu để làm kết quả này.
+
+Vẫn phải chừa vùng vân không chữ/hình in: các họa tiết chung đủ đậm có thể lấn át vân. Kết quả này chưa chứng minh chống chụp lại/in sao tem, xác minh giấy tái chế hoặc nguồn gốc vật liệu.
+
+Tài liệu: [OpenCV ECC](https://docs.opencv.org/doc/doxygen/html/dc/d6b/group__video__track.html).

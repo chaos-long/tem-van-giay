@@ -153,7 +153,7 @@ def create_app(data_dir=None,admin_token=None):
     def assets(filename):return send_from_directory(static,filename)
     @app.get('/api/health')
     def health():
-        return jsonify(status='ok',version='0.5.0',product_count=len(db.summary_rows()),threshold=config['threshold'],margin=config['margin'],busy=app.match_lock.locked())
+        return jsonify(status='ok',version='0.6.0',product_count=len(db.summary_rows()),threshold=config['threshold'],margin=config['margin'],busy=app.match_lock.locked())
     @app.post('/api/admin/login')
     @admin
     def login():return jsonify(status='ok')

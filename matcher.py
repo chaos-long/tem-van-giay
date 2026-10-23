@@ -186,6 +186,99 @@ def correlation(a,b):
     denom=float(np.linalg.norm(a)*np.linalg.norm(b))
     return float(np.dot(a,b)/denom) if denom>1e-8 else 0.0
 
+def _texture_score(aligned,reference_gray,valid):
+    mask=valid.copy()
+    mask[:12]=False;mask[-12:]=False;mask[:,:12]=False;mask[:,-12:]=False
+    if float(mask.mean())<.55:return None
+    h,w=reference_gray.shape;a=texture(aligned);b=texture(reference_gray);values=[]
+    for y in range(3):
+        for x in range(3):
+            sl=(slice(y*h//3,(y+1)*h//3),slice(x*w//3,(x+1)*w//3));use=mask[sl]
+            if use.mean()>.70:values.append(correlation(a[sl][use],b[sl][use]))
+    if len(values)<6:return None
+    median=float(np.median(values));score=.7*median+.3*correlation(a[mask],b[mask])
+    return {'score':max(0.,float(score)),'median_texture':median,'mask':mask}
+
+def _bounded_alignment(query,reference,H,source,target,initial,aligned,valid):
+    """Refine only strongly supported geometry; keep the original NCC rule.
+
+    ECC is constrained by the original SIFT anchors. Small local translations
+    account for slightly bent paper; they cannot create feature correspondences.
+    All final pixels are sampled once from the original query, not a warped copy.
+    """
+    h,w=reference.gray.shape
+    best=initial;best_image=aligned;best_valid=valid;chosen_H=H
+    before=initial['score'];method='ransac';cells=0;max_shift=0.
+    rect=np.float32([[0,0],[w-1,0],[w-1,h-1],[0,h-1]]).reshape(-1,1,2)
+    original_rect=cv2.perspectiveTransform(rect,H)
+    try:
+        warp=np.linalg.inv(H).astype(np.float32)
+        _,warp=cv2.findTransformECC(texture(reference.gray),texture(query.gray),warp,
+            cv2.MOTION_HOMOGRAPHY,(cv2.TERM_CRITERIA_COUNT|cv2.TERM_CRITERIA_EPS,80,1e-6),None,5)
+        refined_H=np.linalg.inv(warp)
+        predicted=cv2.perspectiveTransform(source.reshape(-1,1,2),refined_H)[:,0,:]
+        errors=np.linalg.norm(predicted-target,axis=1)
+        moved_rect=cv2.perspectiveTransform(rect,refined_H)
+        # Corner extrapolation may move farther than supported interior anchors.
+        bounded=(np.isfinite(refined_H).all() and np.isfinite(predicted).all()
+                 and np.median(errors)<=1.5 and np.percentile(errors,90)<=RANSAC_ERROR_PX
+                 and np.max(np.linalg.norm(moved_rect-original_rect,axis=2))<=3*RANSAC_ERROR_PX
+                 and cv2.isContourConvex(moved_rect.astype(np.int32))
+                 and .55*w*h<abs(cv2.contourArea(moved_rect[:,0,:]))<1.7*w*h)
+        if bounded:
+            candidate=cv2.warpPerspective(query.gray,refined_H,(w,h))
+            candidate_valid=cv2.warpPerspective(np.ones(query.gray.shape,np.uint8),refined_H,(w,h))>0
+            score=_texture_score(candidate,reference.gray,candidate_valid)
+            if score and score['score']>best['score']:
+                best=score;best_image=candidate;best_valid=candidate_valid;chosen_H=refined_H;method='ecc'
+    except (cv2.error,np.linalg.LinAlgError,ValueError):pass
+
+    # Fit a smooth, bounded displacement field from 5x5 small neighborhoods.
+    # Only cells with >=3 real RANSAC inliers may move, by <=3 pixels, and their
+    # shift must agree with the feature residuals within 2 pixels.
+    a=texture(best_image);b=texture(reference.gray);grid=5;radius=3
+    shifts=np.zeros((grid,grid,2),np.float32)
+    projected=cv2.perspectiveTransform(source.reshape(-1,1,2),chosen_H)[:,0,:]
+    residual=projected-target
+    for y in range(grid):
+        for x in range(grid):
+            y0=max(5,y*h//grid+5);y1=min(h-5,(y+1)*h//grid-5)
+            x0=max(5,x*w//grid+5);x1=min(w-5,(x+1)*w//grid-5)
+            anchors=(target[:,0]>=x0)&(target[:,0]<x1)&(target[:,1]>=y0)&(target[:,1]<y1)
+            if anchors.sum()<3 or best_valid[y0-radius:y1+radius,x0-radius:x1+radius].mean()<.90:continue
+            if b[y0:y1,x0:x1].std()<1e-6 or a[y0-radius:y1+radius,x0-radius:x1+radius].std()<1e-6:continue
+            scores=cv2.matchTemplate(a[y0-radius:y1+radius,x0-radius:x1+radius],b[y0:y1,x0:x1],cv2.TM_CCOEFF_NORMED)
+            scores[~np.isfinite(scores)]=-1
+            yy,xx=np.mgrid[-radius:radius+1,-radius:radius+1]
+            scores[np.hypot(xx,yy)>radius]=-1
+            py,px=np.unravel_index(np.argmax(scores),scores.shape)
+            delta=np.array([px-radius,py-radius],np.float32)
+            # Quadratic interpolation estimates the peak between integer pixels.
+            for axis in range(2):
+                k=px if axis==0 else py;values=scores[py,:] if axis==0 else scores[:,px]
+                if 0<k<2*radius and min(values[k-1:k+2])>-.9:
+                    left,center,right=values[k-1:k+2];den=left-2*center+right
+                    if den<-.001:delta[axis]+=np.clip(.5*(left-right)/den,-.5,.5)
+            if (not np.isfinite(delta).all() or np.linalg.norm(delta)>radius
+                or np.linalg.norm(delta-np.median(residual[anchors],axis=0))>2
+                or scores[py,px]<.15 or np.linalg.norm(delta)<.05):continue
+            shifts[y,x]=delta;cells+=1
+    if cells:
+        field=cv2.resize(shifts,(w,h),interpolation=cv2.INTER_LINEAR)
+        yy,xx=np.mgrid[:h,:w].astype(np.float32)
+        coordinates=np.stack([xx+field[:,:,0],yy+field[:,:,1]],axis=-1)
+        mapped=cv2.perspectiveTransform(coordinates.reshape(-1,1,2),np.linalg.inv(chosen_H))[:,0,:].reshape(h,w,2)
+        candidate=cv2.remap(query.gray,mapped[:,:,0],mapped[:,:,1],cv2.INTER_LINEAR)
+        candidate_valid=cv2.remap(np.ones(query.gray.shape,np.uint8),mapped[:,:,0],mapped[:,:,1],cv2.INTER_NEAREST)>0
+        score=_texture_score(candidate,reference.gray,candidate_valid)
+        if score and score['score']>best['score']:
+            best=score;best_image=candidate;best_valid=candidate_valid;method+=' + local'
+            max_shift=float(np.linalg.norm(field,axis=2).max())
+        else:cells=0
+    info={'method':method,'score_before':round(before,4),'score_after':round(best['score'],4),
+          'local_cells':cells,'max_local_shift_px':round(max_shift,3),'local_shift_limit_px':radius}
+    return best,best_image,best_valid,info
+
 def compare(query,reference,diagnostics=False,failure_reasons=None):
     def reject(reason):
         if failure_reasons is not None:failure_reasons.append(reason)
@@ -213,26 +306,21 @@ def compare(query,reference,diagnostics=False,failure_reasons=None):
     coverage=len({(min(2,int(p[0]/w*3)),min(2,int(p[1]/h*3))) for p in target[flags]})
     if coverage<4:return reject('coverage')
     aligned=cv2.warpPerspective(query.gray,homography,(w,h))
-    mask=cv2.warpPerspective(np.ones(query.gray.shape,np.uint8),homography,(w,h))>0
-    mask[:12]=False;mask[-12:]=False;mask[:,:12]=False;mask[:,-12:]=False
-    if float(mask.mean())<.55:return reject('overlap')
-    a=texture(aligned);b=texture(reference.gray)
-    values=[]
-    for y in range(3):
-        for x in range(3):
-            sl=(slice(y*h//3,(y+1)*h//3),slice(x*w//3,(x+1)*w//3))
-            valid=mask[sl]
-            if valid.mean()>.70:values.append(correlation(a[sl][valid],b[sl][valid]))
-    if len(values)<6:return reject('overlap')
-    median=float(np.median(values));overall=correlation(a[mask],b[mask])
-    score=.7*median+.3*overall
-    result={'score':round(max(0,score),4),'inliers':inliers,'coverage_tiles':coverage,'median_texture':round(median,4)}
+    valid=cv2.warpPerspective(np.ones(query.gray.shape,np.uint8),homography,(w,h))>0
+    metrics=_texture_score(aligned,reference.gray,valid)
+    if metrics is None:return reject('overlap')
+    baseline=aligned;refinement=None
+    if inliers>=30 and coverage>=6 and .20<=metrics['score']<.80:
+        metrics,aligned,valid,refinement=_bounded_alignment(query,reference,homography,source[flags],target[flags],metrics,aligned,valid)
+    mask=metrics['mask']
+    result={'score':round(metrics['score'],4),'inliers':inliers,'coverage_tiles':coverage,'median_texture':round(metrics['median_texture'],4)}
+    if refinement and refinement['score_after']>refinement['score_before']:result['alignment']=refinement
     if diagnostics:
         # These are the geometry and accepted points from THIS comparison, not a
         # second reconstruction or an invented illustration. Never JSON-encode them.
         result['_geometry']={'source':source[flags],'target':target[flags],
                              'all_source':source,'all_target':target,'inlier_flags':flags,
-                             'aligned':aligned,'mask':mask}
+                             'aligned':aligned,'mask':mask,'baseline_aligned':baseline,'alignment':refinement}
     return result
 
 def decide(query,records,threshold=.64,margin=.08,diagnostics=False):
@@ -384,4 +472,14 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
     heatmap=cv2.applyColorMap(display,cv2.COLORMAP_INFERNO);heatmap[~mask]=(72,72,72)
     analysis['stages'].append(_stage('difference','11. Quan sát phần khác nhau',
         'Ảnh phụ minh họa độ chênh tuyệt đối giữa hai vùng vân đã căn: màu sáng hơn là chênh lớn hơn trong ảnh này; vùng xám nằm ngoài phép so. Màu đã tăng tương phản tương đối, không phải xác suất thật/giả và không thay công thức NCC đang ra quyết định.',heatmap))
+    alignment=geometry.get('alignment')
+    if alignment and alignment['score_after']>alignment['score_before']:
+        analysis['alignment']=alignment
+        baseline=geometry['baseline_aligned']
+        analysis['stages'].append(_stage('alignment_refinement','12. Căn tinh trước khi so vân',
+            f"Trái: chỉ căn bằng RANSAC. Phải: căn tinh bằng {alignment['method']}. "
+            f"Điểm cùng công thức tăng từ {alignment['score_before']:.4f} lên {alignment['score_after']:.4f}. "
+            f"Có {alignment['local_cells']} ô được hiệu chỉnh; độ dịch cục bộ lớn nhất {alignment['max_local_shift_px']:.3f} pixel, giới hạn 3 pixel. "
+            'Chỉ tinh chỉnh khi có ít nhất 30 inlier phân bố trên 6/9 vùng; giữ nguyên ngưỡng nhận 0,64 và độ tách biệt 0,08. '
+            'Các ảnh và số đo thuộc chính lần so này, không thêm ảnh chụp lại vào cơ sở dữ liệu.',np.hstack([cv2.cvtColor(baseline,cv2.COLOR_GRAY2BGR),cv2.cvtColor(aligned,cv2.COLOR_GRAY2BGR)])))
     return analysis
