@@ -175,7 +175,7 @@ def prepare(image,corners=None,explain=False):
     detail = float(texture(gray).std()*255)
     quality={'sharpness':round(sharpness,2),'texture_detail':round(detail,2),'feature_count':len(points)}
     sample = Sample(normalized,gray,points,descriptors,quality,quad)
-    if sharpness < 7 or detail < 1.0 or descriptors is None or len(points) < 18:
+    if sharpness < 2 or detail < .5 or descriptors is None or len(points) < 8:
         message='Vùng giấy chưa đủ chi tiết để so khớp. Tăng ánh sáng, chụp gần và lấy nét; không dùng ảnh bị làm trắng nền.'
         raise ImageProblem(message,build_analysis(sample,eligible=False,quality_message=message) if explain else None)
     return sample
@@ -285,26 +285,26 @@ def compare(query,reference,diagnostics=False,failure_reasons=None):
         return None
     matcher=cv2.BFMatcher(cv2.NORM_L2)
     pairs=matcher.knnMatch(query.descriptors,reference.descriptors,k=2)
-    good=[a for pair in pairs if len(pair)==2 for a,b in [pair] if a.distance < .72*b.distance]
+    good=[a for pair in pairs if len(pair)==2 for a,b in [pair] if a.distance < .85*b.distance]
     # One-to-one correspondence avoids inflating inlier counts on repeated print.
     unique={}
     for m in sorted(good,key=lambda m:m.distance):
         unique.setdefault(m.trainIdx,m)
     good=list(unique.values())
-    if len(good)<14:return reject('features')
+    if len(good)<8:return reject('features')
     source=np.float32([query.points[m.queryIdx] for m in good])
     target=np.float32([reference.points[m.trainIdx] for m in good])
     homography,inlier_mask=cv2.findHomography(source,target,cv2.RANSAC,RANSAC_ERROR_PX,maxIters=RANSAC_MAX_ITERATIONS)
     if homography is None or inlier_mask is None or not np.isfinite(homography).all():return reject('geometry')
     flags=inlier_mask.ravel().astype(bool);inliers=int(flags.sum())
-    if inliers<14 or inliers/len(good)<.45:return reject('geometry')
+    if inliers<8 or inliers/len(good)<.35:return reject('geometry')
     h,w=reference.gray.shape
     rect=np.float32([[0,0],[w,0],[w,h],[0,h]]).reshape(-1,1,2)
     mapped=cv2.perspectiveTransform(rect,homography)[:,0,:]
     area=abs(cv2.contourArea(mapped))
     if not cv2.isContourConvex(mapped.astype(np.int32)) or not .55*w*h<area<1.7*w*h:return reject('geometry')
     coverage=len({(min(2,int(p[0]/w*3)),min(2,int(p[1]/h*3))) for p in target[flags]})
-    if coverage<4:return reject('coverage')
+    if coverage<3:return reject('coverage')
     aligned=cv2.warpPerspective(query.gray,homography,(w,h))
     valid=cv2.warpPerspective(np.ones(query.gray.shape,np.uint8),homography,(w,h))>0
     metrics=_texture_score(aligned,reference.gray,valid)
@@ -323,7 +323,7 @@ def compare(query,reference,diagnostics=False,failure_reasons=None):
                              'aligned':aligned,'mask':mask,'baseline_aligned':baseline,'alignment':refinement}
     return result
 
-def decide(query,records,threshold=.64,margin=.08,diagnostics=False):
+def decide(query,records,threshold=.40,margin=.08,diagnostics=False):
     candidates=[]
     failure_reasons=[]
     best_geometry=None;best_score=-1.0
@@ -336,6 +336,30 @@ def decide(query,records,threshold=.64,margin=.08,diagnostics=False):
             candidates.append({'product_id':product_id,**result})
     candidates.sort(key=lambda item:item['score'],reverse=True)
     if not candidates or candidates[0]['score']<threshold:
+        # A coarse, lower-confidence fallback helps low-resolution photographs.
+        # It is experimental and can accept different paper with similar marks.
+        visual=[]
+        def large_band(image):
+            gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY) if image.ndim==3 else image
+            gray=cv2.resize(gray,(512,358)).astype(np.float32)/255
+            return cv2.GaussianBlur(gray,(0,0),3)-cv2.GaussianBlur(gray,(0,0),25)
+        def unit(value):
+            value=value[20:-20,25:-25].copy();value-=value.mean()
+            return value/(np.linalg.norm(value)+1e-9)
+        q=large_band(query.image)
+        for product_id,reference in records:
+            ref=large_band(reference.image);best=-1.
+            for rotated in (q,cv2.rotate(q,cv2.ROTATE_180)):
+                (dx,dy),_=cv2.phaseCorrelate(ref[25:-25,25:-25],rotated[25:-25,25:-25])
+                for x,y in ((0.,0.),(dx,dy)):
+                    if abs(x)>20 or abs(y)>20:continue
+                    warped=cv2.warpAffine(rotated,np.float32([[1,0,-x],[0,1,-y]]),(512,358))
+                    best=max(best,float(np.sum(unit(warped)*unit(ref))))
+            visual.append((best,product_id))
+        visual.sort(reverse=True)
+        if visual and visual[0][0]>=.27 and (len(visual)<2 or visual[0][0]-visual[1][0]>=.08):
+            return {'status':'matched','message':'Gợi ý thử nghiệm: vân giấy tương tự, chưa xác nhận thật giả.',
+                    'match':{'product_id':visual[0][1],'score':round(visual[0][0],4),'inliers':0,'coverage_tiles':0,'method':'visual_fallback'},'quality':query.quality}
         order={'features':0,'geometry':1,'coverage':2,'overlap':3,'texture':4}
         reason='texture' if candidates else max(failure_reasons,key=lambda code:order[code],default='features')
         hints={
@@ -429,6 +453,8 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
         if decision.get('capture_hint'):summary['message']=decision['capture_hint']
         if status=='matched':
             summary.update({k:decision['match'][k] for k in ['score','inliers','coverage_tiles']})
+            if decision['match'].get('method')=='visual_fallback':
+                summary.update(threshold=.27, method='visual_fallback', message='Kết quả dựa trên tương quan vân, độ tin cậy thấp; không có cặp điểm SIFT để minh họa RANSAC.')
         analysis['decision']=summary
     else:status=None
     if status!='matched' or reference is None or geometry is None:return analysis
@@ -442,7 +468,7 @@ def build_analysis(sample,eligible=True,quality_message=None,decision=None,
                         'displayed_inliers':shown_kept,'displayed_outliers':shown_rejected,
                         'max_iterations':RANSAC_MAX_ITERATIONS,'reprojection_threshold_px':RANSAC_ERROR_PX}
     analysis['stages'].append(_stage('matches_raw','7. Ghép cặp trước RANSAC',
-        f'Trái là ảnh chụp, phải là mẫu khớp. Có {len(inlier_flags)} cặp ứng viên sau so mô tả SIFT, lọc tỷ lệ 0,72 và giữ một cặp cho mỗi điểm mẫu. Vẽ {len(selected_pairs)} cặp thực, tối đa 60; màu xanh lam chưa nói cặp đó phù hợp hình học. Bước sau dùng đúng các cặp đang vẽ để phân loại.',
+        f'Trái là ảnh chụp, phải là mẫu khớp. Có {len(inlier_flags)} cặp ứng viên sau so mô tả SIFT, lọc tỷ lệ 0,85 và giữ một cặp cho mỗi điểm mẫu. Vẽ {len(selected_pairs)} cặp thực, tối đa 60; màu xanh lam chưa nói cặp đó phù hợp hình học. Bước sau dùng đúng các cặp đang vẽ để phân loại.',
         _pair_view(sample.gray,reference.gray,all_source,all_target,selected_pairs)))
     analysis['stages'].append(_stage('ransac','8. RANSAC giữ và loại cặp điểm',
         f'RANSAC thử các nhóm điểm để tìm một phép biến đổi phối cảnh được nhiều cặp cùng tuân theo. Mặt nạ kết quả của chính lần so này giữ {kept} cặp và loại {rejected} cặp. Trên hình: {shown_kept} cặp xanh lá được giữ, {shown_rejected} cặp đỏ bị loại. Ngưỡng sai số 3 pixel; 2.000 là giới hạn vòng thử, không phải số vòng đã ghi nhận. Không dựng lại các vòng thử bên trong thư viện.',
