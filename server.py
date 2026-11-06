@@ -92,7 +92,7 @@ def create_app(data_dir=None,admin_token=None):
     if config_path.exists():
         config=json.loads(config_path.read_text(encoding='utf-8'))
     else:
-        config={'admin_token':secrets.token_urlsafe(32),'threshold':.64,'margin':.08}
+        config={'admin_token':secrets.token_urlsafe(32),'threshold':.40,'margin':.08}
         config_path.write_text(json.dumps(config,ensure_ascii=False,indent=2),encoding='utf-8')
     token=admin_token or os.environ.get('TEM_ADMIN_TOKEN') or config['admin_token']
     static=Path(getattr(sys,'_MEIPASS',Path(__file__).parent))/'web'
