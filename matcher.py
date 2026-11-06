@@ -89,7 +89,7 @@ def detect_rectangle(image):
                 sides = [np.linalg.norm(p[(i+1)%4]-p[i]) for i in range(4)]
                 ar = max((sides[0]+sides[2])/(sides[1]+sides[3]), (sides[1]+sides[3])/(sides[0]+sides[2]))
                 fill=area/abs(cv2.contourArea(p))
-                if not (1.1<=ar<=3.5 and min(sides)>=65 and .88<=fill<=1.12):continue
+                if not (1.0<=ar<=3.5 and min(sides)>=65 and .88<=fill<=1.12):continue
                 contrasts=[]
                 for j in range(4):
                     a,b=p[j],p[(j+1)%4];direction=(b-a)/sides[j]
@@ -106,7 +106,7 @@ def detect_rectangle(image):
                 # A huge quadrilateral with one side lying on the background
                 # should lose to a paper outline supported on all four sides.
                 support=min(1.,min(contrasts)/(8 if use_chroma else 12))
-                score=area*(.15+.85*support)*(1-min(.12,abs(1-fill)))
+                score=(area**.45)*(min(40., min(contrasts))+1)*(1-min(.12,abs(1-fill)))
                 candidates.append((score,p/scale))
                 break
     if not candidates:
